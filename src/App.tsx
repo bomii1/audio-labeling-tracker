@@ -1,106 +1,1352 @@
 import { useEffect, useState } from 'react';
-import { Link, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import {
+  Link,
+  NavLink,
+  Route,
+  Routes,
+  useNavigate,
+  useParams,
+} from 'react-router-dom';
 import { db, type Project, type Snapshot, type ProjectMember } from './db';
 import { inspectExport, type Annotation, type Task } from './analysis';
-import { ArrowLeft, ArrowRight, CheckCircle2, FileJson, Folder, History, LayoutDashboard, Plus, UploadCloud, X, Pencil, Trash2, Users, AlertTriangle } from 'lucide-react';
-function useProjects() { const [items,setItems]=useState<Project[]>([]); const refresh=()=>db.projects.toArray().then(setItems); useEffect(()=>{void refresh()},[]); return {items,refresh}; }
-function ProjectHome(){
- const {items,refresh}=useProjects();
- const [editing,setEditing]=useState<Project|null|undefined>(undefined);
- const [deleting,setDeleting]=useState<Project|null>(null);
- const [name,setName]=useState('');const [game,setGame]=useState('');const [lsId,setLsId]=useState('');const [desc,setDesc]=useState('');
- const [error,setError]=useState('');const [confirmation,setConfirmation]=useState('');const [busy,setBusy]=useState(false);
- const [stats,setStats]=useState<Record<number,Snapshot>>({});
- useEffect(()=>{void db.snapshots.toArray().then(rows=>{const next:Record<number,Snapshot>={};for(const row of rows.sort((a,b)=>a.recordDate.localeCompare(b.recordDate)||a.uploadedAt.localeCompare(b.uploadedAt)))next[row.projectId]=row;setStats(next)})},[items]);
- function openEditor(project:Project|null){setEditing(project);setName(project?.name??'');setGame(project?.gameName??'');setLsId(String(project?.labelStudioProjectId??''));setDesc(project?.description??'');setError('')}
- async function submitProject(){const id=Number(lsId);if(!name.trim()||!Number.isInteger(id)||id<=0){setError('프로젝트명과 올바른 Label Studio 프로젝트 ID를 입력해 주세요.');return}setBusy(true);setError('');try{if(editing?.id){if(id!==editing.labelStudioProjectId){setError('기존 기록 보호를 위해 Label Studio 프로젝트 ID는 변경할 수 없습니다.');return}await db.projects.update(editing.id,{name:name.trim(),gameName:game.trim(),description:desc.trim()})}else{await db.projects.add({name:name.trim(),labelStudioProjectId:id,gameName:game.trim(),description:desc.trim(),createdAt:new Date().toISOString()})}setEditing(undefined);refresh()}catch(e){setError(e instanceof Error&&e.name==='ConstraintError'?'이미 등록된 Label Studio 프로젝트 ID입니다.':e instanceof Error?e.message:'저장에 실패했습니다.')}finally{setBusy(false)}}
- async function deleteProject(){if(!deleting?.id||confirmation!==`delete ${deleting.name}`)return;setBusy(true);setError('');try{const id=deleting.id;await db.transaction('rw',db.projects,db.snapshots,db.taskRegions,db.annotationChoices,db.projectMembers,async()=>{const snaps=await db.snapshots.where('projectId').equals(id).primaryKeys();for(const snapshotId of snaps)await db.taskRegions.where('snapshotId').equals(snapshotId).delete();await db.snapshots.where('projectId').equals(id).delete();await db.annotationChoices.where('projectId').equals(id).delete();await db.projectMembers.where('projectId').equals(id).delete();await db.projects.delete(id)});setDeleting(null);setConfirmation('');refresh()}catch(e){setError(e instanceof Error?e.message:'프로젝트 삭제에 실패했습니다.')}finally{setBusy(false)}}
- return <div className="content"><div className="heading"><div><span className="eyebrow">WORKSPACE</span><h1>내 프로젝트</h1><p>담당하는 라벨링 프로젝트를 선택해 작업 현황을 확인하세요.</p></div><button className="primary" onClick={()=>openEditor(null)}><Plus size={17}/> 프로젝트 추가</button></div>
- {items.length===0?<div className="empty"><Folder size={40}/><h2>아직 등록된 프로젝트가 없어요</h2><p>Label Studio 프로젝트 ID로 첫 프로젝트를 등록해 보세요.</p><button className="primary" onClick={()=>openEditor(null)}><Plus size={16}/> 프로젝트 추가</button></div>:<div className="project-grid">{items.map(project=><div className="project-card" key={project.id}><div className="project-card-top"><div className="folder"><Folder size={22}/></div><div className="project-controls"><button className="icon-button" title="프로젝트 수정" aria-label={`${project.name} 수정`} onClick={()=>openEditor(project)}><Pencil size={17}/></button><button className="icon-button danger-icon" title="프로젝트 삭제" aria-label={`${project.name} 삭제`} onClick={()=>{setDeleting(project);setConfirmation('');setError('')}}><Trash2 size={17}/></button></div></div><Link className="project-card-link" to={`/projects/${project.id}`}><h2>{project.name}</h2><span className="muted">Project ID {project.labelStudioProjectId}{project.gameName&&` · ${project.gameName}`}</span><div className="card-footer"><div><small>최근 누적 Region</small><strong>{project.id&&stats[project.id]?stats[project.id].totalRegions.toLocaleString():'—'}</strong></div><span className="muted">{project.id&&stats[project.id]?stats[project.id].recordDate:'기록 없음'}</span><ArrowRight size={18}/></div></Link></div>)}</div>}
- {editing!==undefined&&<div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setEditing(undefined)}}><div className="modal" role="dialog" aria-modal="true" aria-label={editing?'프로젝트 수정':'프로젝트 추가'}><div className="modal-title"><h2>{editing?'프로젝트 수정':'프로젝트 추가'}</h2><button className="icon-button" onClick={()=>setEditing(undefined)}><X size={18}/></button></div><label>프로젝트명 *<input value={name} onChange={e=>setName(e.target.value)} placeholder="예: RAFT 오디오 라벨링"/></label><label>Label Studio 프로젝트 ID *<input type="number" min="1" value={lsId} disabled={!!editing} onChange={e=>setLsId(e.target.value)} placeholder="예: 54"/></label><label>게임명 (선택)<input value={game} onChange={e=>setGame(e.target.value)} placeholder="예: RAFT"/></label><label>설명 (선택)<textarea value={desc} onChange={e=>setDesc(e.target.value)} placeholder="프로젝트 메모"/></label>{editing&&<p className="muted">기존 기록 보호를 위해 Label Studio 프로젝트 ID는 수정할 수 없습니다.</p>}{error&&<p className="error">{error}</p>}<div className="actions"><button className="secondary" onClick={()=>setEditing(undefined)}>취소</button><button className="primary" disabled={busy} onClick={()=>void submitProject()}>{busy?'저장 중...':editing?'변경 사항 저장':'추가하기'}</button></div></div></div>}
- {deleting&&<div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setDeleting(null)}}><div className="modal" role="alertdialog" aria-modal="true" aria-label="프로젝트 영구 삭제 확인"><div className="modal-title"><h2>프로젝트 영구 삭제</h2><button className="icon-button" onClick={()=>setDeleting(null)}><X size={18}/></button></div><p className="delete-warning"><strong>{deleting.name}</strong> 프로젝트와 모든 날짜별 분석 기록, Task별 집계, Annotation 선택 이력이 영구 삭제됩니다. 되돌릴 수 없습니다.</p><label>삭제하려면 아래 문구를 정확히 입력하세요.<div className="confirmation-text">delete {deleting.name}</div><input autoComplete="off" spellCheck={false} value={confirmation} onChange={e=>setConfirmation(e.target.value)} placeholder={`delete ${deleting.name}`}/></label>{error&&<p className="error">{error}</p>}<div className="actions"><button className="secondary" onClick={()=>setDeleting(null)}>취소</button><button className="delete-button" disabled={busy||confirmation!==`delete ${deleting.name}`} onClick={()=>void deleteProject()}>{busy?'삭제 중...':'프로젝트 영구 삭제'}</button></div></div></div>}
- </div>
+import { downloadDraftExcel, downloadDetailExcel } from './excel';
+import {
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  FileJson,
+  Folder,
+  History,
+  LayoutDashboard,
+  Plus,
+  UploadCloud,
+  X,
+  Pencil,
+  Trash2,
+  Users,
+  AlertTriangle,
+} from 'lucide-react';
+function useProjects() {
+  const [items, setItems] = useState<Project[]>([]);
+  const refresh = () => db.projects.toArray().then(setItems);
+  useEffect(() => {
+    void refresh();
+  }, []);
+  return { items, refresh };
 }
-function ProjectShell(){const {projectId}=useParams();const [project,setProject]=useState<Project>();useEffect(()=>{void db.projects.get(Number(projectId)).then(setProject)},[projectId]);if(!project)return <div className="content"><p>프로젝트를 불러오는 중이거나 존재하지 않습니다.</p><Link to="/">프로젝트 목록으로</Link></div>;return <ProjectPage project={project}/>}
-function ProjectPage({project}:{project:Project}){const [tab,setTab]=useState<'dashboard'|'analyze'|'history'|'members'>('dashboard');const [snapshots,setSnapshots]=useState<Snapshot[]>([]);const refresh=()=>db.snapshots.where('projectId').equals(project.id!).toArray().then(setSnapshots);useEffect(()=>{void refresh()},[project.id]);const ordered=[...snapshots].sort((a,b)=>a.recordDate.localeCompare(b.recordDate)||a.uploadedAt.localeCompare(b.uploadedAt));const perDay=new Map<string,Snapshot>();ordered.forEach(s=>perDay.set(s.recordDate,s));const days=[...perDay.values()];const latest=days.at(-1);const previous=days.at(-2);return <div className="content"><Link to="/" className="back"><ArrowLeft size={16}/> 모든 프로젝트</Link><div className="heading"><div><span className="eyebrow">PROJECT {project.labelStudioProjectId}</span><h1>{project.name}</h1><p>{project.description||project.gameName||'프로젝트 작업 현황'}</p></div><button className="primary" onClick={()=>setTab('analyze')}><UploadCloud size={17}/> JSON 업로드</button></div><div className="tabs"><button className={tab==='dashboard'?'active':''} onClick={()=>setTab('dashboard')}><LayoutDashboard size={17}/> 대시보드</button><button className={tab==='analyze'?'active':''} onClick={()=>setTab('analyze')}><FileJson size={17}/> JSON 분석</button><button className={tab==='history'?'active':''} onClick={()=>setTab('history')}><History size={17}/> 기록 조회</button><button className={tab==='members'?'active':''} onClick={()=>setTab('members')}><Users size={17}/> 작업자 관리</button></div>{tab==='dashboard'&&<><div className="metrics"><Metric label="누적 Region" value={latest?.totalRegions.toLocaleString()??'—'}/><Metric label="최근 순증감" value={latest?(previous?`${latest.totalRegions-previous.totalRegions>=0?'+':''}${(latest.totalRegions-previous.totalRegions).toLocaleString()}`:'기준값'):'—'}/><Metric label="전체 Task" value={latest?.totalTasks.toLocaleString()??'—'}/><Metric label="Region 0개 Task" value={latest?.zeroRegionTasks.toLocaleString()??'—'}/></div><section className="panel"><h2>최근 기록</h2>{latest?<p>{latest.recordDate} 기준 · {latest.fileName}</p>:<div className="empty-small"><p>아직 분석 기록이 없어요.</p><button className="primary" onClick={()=>setTab('analyze')}>첫 JSON 업로드</button></div>}</section></>}{tab==='analyze'&&<Analyze project={project} refresh={refresh} latest={latest}/ >}{tab==='members'&&<ProjectMembers project={project}/>} {tab==='history'&&<section className="panel"><h2>기록 조회</h2>{days.length===0?<p>저장된 기록이 없습니다.</p>:<div className="table-wrap"><table><thead><tr><th>기록 날짜</th><th>업로드 시간</th><th>전체 Task</th><th>누적 Region</th><th>순증감</th><th>Region 0개</th></tr></thead><tbody>{days.slice().reverse().map((s,i)=>{const prior=days[days.length-2-i];return <tr key={s.id}><td>{s.recordDate}</td><td>{new Date(s.uploadedAt).toLocaleString('ko-KR')}</td><td>{s.totalTasks.toLocaleString()}</td><td>{s.totalRegions.toLocaleString()}</td><td>{prior?(s.totalRegions-prior.totalRegions).toLocaleString():'기준값'}</td><td>{s.zeroRegionTasks}</td></tr>})}</tbody></table></div>}</section>}</div>}
-function Metric({label,value}:{label:string;value:string}){return <div className="metric"><span>{label}</span><strong>{value}</strong></div>}
-function ProjectMembers({project}:{project:Project}){
- const [members,setMembers]=useState<ProjectMember[]>([]);
- const [userId,setUserId]=useState('');const [name,setName]=useState('');const [role,setRole]=useState<ProjectMember['role']>('worker');
- const [editing,setEditing]=useState<number|null>(null);const [error,setError]=useState('');const [notice,setNotice]=useState('');
- const refresh=()=>db.projectMembers.where('projectId').equals(project.id!).sortBy('labelStudioUserId').then(setMembers);
- useEffect(()=>{void refresh()},[project.id]);
- const reset=()=>{setEditing(null);setUserId('');setName('');setRole('worker')};
- const edit=(member:ProjectMember)=>{setEditing(member.id!);setUserId(String(member.labelStudioUserId));setName(member.name);setRole(member.role);setError('');setNotice('')};
- async function saveMember(){setError('');setNotice('');const id=Number(userId);
-  if(!Number.isSafeInteger(id)||id<=0){setError('올바른 Label Studio 사용자 ID를 입력해 주세요.');return}
-  try{const existing=await db.projectMembers.where('[projectId+labelStudioUserId]').equals([project.id!,id]).first();
-   if(existing&&existing.id!==editing){setError('이 프로젝트에 이미 등록된 사용자 ID입니다.');return}
-   const member={projectId:project.id!,labelStudioUserId:id,name:name.trim(),role};
-   if(editing!==null)await db.projectMembers.update(editing,member);else await db.projectMembers.add(member);
-   reset();await refresh();setNotice('작업자 정보가 저장되었습니다.');
-  }catch(e){setError(e instanceof Error?e.message:'저장에 실패했습니다.')}
- }
- async function removeMember(member:ProjectMember){if(!window.confirm(`작업자 #${member.labelStudioUserId}의 이름과 역할 정보를 삭제할까요?\n기존 분석 기록은 삭제되지 않습니다.`))return;
-  try{await db.projectMembers.delete(member.id!);await refresh();if(editing===member.id)reset();setNotice('등록 정보가 삭제되었습니다.')}catch(e){setError(e instanceof Error?e.message:'삭제 실패')}
- }
- const roleText=(r:ProjectMember['role'])=>r==='pl'?'PL':r==='both'?'작업자 · PL':'작업자';
- return <section className="panel"><h2>작업자 관리</h2><p>JSON에서 발견된 사용자 ID를 자동 등록해요. 이름과 역할은 이 프로젝트에만 저장됩니다.</p>
- <div className="member-summary">등록된 사용자 <strong>{members.length}명</strong> · 이름 미등록 <strong>{members.filter(m=>!m.name).length}명</strong></div>
- <div className="table-wrap"><table><thead><tr><th>Label Studio ID</th><th>표시 이름</th><th>역할</th><th>관리</th></tr></thead><tbody>{members.length?members.map(member=><tr key={member.id}><td>#{member.labelStudioUserId}</td><td>{member.name||<span className="muted">미등록</span>}</td><td>{roleText(member.role)}</td><td><div className="member-actions"><button className="secondary" onClick={()=>edit(member)}><Pencil size={14}/> 수정</button><button className="secondary" onClick={()=>void removeMember(member)}><Trash2 size={14}/> 삭제</button></div></td></tr>):<tr><td colSpan={4} className="muted">아직 등록된 사용자가 없어요. JSON을 업로드하거나 직접 등록해 주세요.</td></tr>}</tbody></table></div>
- <div className="member-form"><h3>{editing!==null?'사용자 수정':'사용자 직접 등록'}</h3><div className="member-fields"><label>Label Studio ID<input type="number" min="1" value={userId} onChange={e=>setUserId(e.target.value)} placeholder="예: 30"/></label><label>표시 이름<input value={name} onChange={e=>setName(e.target.value)} placeholder="예: 홍길동 (선택)"/></label><label>역할<select value={role} onChange={e=>setRole(e.target.value as ProjectMember['role'])}><option value="worker">작업자</option><option value="pl">PL</option><option value="both">작업자 · PL</option></select></label></div><div className="actions">{editing!==null&&<button className="secondary" onClick={reset}>수정 취소</button>}<button className="primary" onClick={()=>void saveMember()}><Plus size={16}/>{editing!==null?'변경 사항 저장':'사용자 등록'}</button></div>{error&&<p className="error">{error}</p>}{notice&&<p className="success">{notice}</p>}</div>
- <p className="member-hint">참고: 역할은 표시용 정보이며 Region 실적은 항상 Annotation의 최초 제출자(completed_by)에게 귀속돼요.</p></section>
+function ProjectHome() {
+  const { items, refresh } = useProjects();
+  const [editing, setEditing] = useState<Project | null | undefined>(undefined);
+  const [deleting, setDeleting] = useState<Project | null>(null);
+  const [name, setName] = useState('');
+  const [game, setGame] = useState('');
+  const [lsId, setLsId] = useState('');
+  const [desc, setDesc] = useState('');
+  const [error, setError] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [stats, setStats] = useState<Record<number, Snapshot>>({});
+  useEffect(() => {
+    void db.snapshots.toArray().then((rows) => {
+      const next: Record<number, Snapshot> = {};
+      for (const row of rows.sort(
+        (a, b) =>
+          a.recordDate.localeCompare(b.recordDate) ||
+          a.uploadedAt.localeCompare(b.uploadedAt),
+      ))
+        next[row.projectId] = row;
+      setStats(next);
+    });
+  }, [items]);
+  function openEditor(project: Project | null) {
+    setEditing(project);
+    setName(project?.name ?? '');
+    setGame(project?.gameName ?? '');
+    setLsId(String(project?.labelStudioProjectId ?? ''));
+    setDesc(project?.description ?? '');
+    setError('');
+  }
+  async function submitProject() {
+    const id = Number(lsId);
+    if (!name.trim() || !Number.isInteger(id) || id <= 0) {
+      setError('프로젝트명과 올바른 Label Studio 프로젝트 ID를 입력해 주세요.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      if (editing?.id) {
+        if (id !== editing.labelStudioProjectId) {
+          setError(
+            '기존 기록 보호를 위해 Label Studio 프로젝트 ID는 변경할 수 없습니다.',
+          );
+          return;
+        }
+        await db.projects.update(editing.id, {
+          name: name.trim(),
+          gameName: game.trim(),
+          description: desc.trim(),
+        });
+      } else {
+        await db.projects.add({
+          name: name.trim(),
+          labelStudioProjectId: id,
+          gameName: game.trim(),
+          description: desc.trim(),
+          createdAt: new Date().toISOString(),
+        });
+      }
+      setEditing(undefined);
+      refresh();
+    } catch (e) {
+      setError(
+        e instanceof Error && e.name === 'ConstraintError'
+          ? '이미 등록된 Label Studio 프로젝트 ID입니다.'
+          : e instanceof Error
+            ? e.message
+            : '저장에 실패했습니다.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deleteProject() {
+    if (!deleting?.id || confirmation !== `delete ${deleting.name}`) return;
+    setBusy(true);
+    setError('');
+    try {
+      const id = deleting.id;
+      await db.transaction(
+        'rw',
+        db.projects,
+        db.snapshots,
+        db.taskRegions,
+        db.annotationChoices,
+        db.projectMembers,
+        async () => {
+          const snaps = await db.snapshots
+            .where('projectId')
+            .equals(id)
+            .primaryKeys();
+          for (const snapshotId of snaps)
+            await db.taskRegions
+              .where('snapshotId')
+              .equals(snapshotId)
+              .delete();
+          await db.snapshots.where('projectId').equals(id).delete();
+          await db.annotationChoices.where('projectId').equals(id).delete();
+          await db.projectMembers.where('projectId').equals(id).delete();
+          await db.projects.delete(id);
+        },
+      );
+      setDeleting(null);
+      setConfirmation('');
+      refresh();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : '프로젝트 삭제에 실패했습니다.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="content">
+      <div className="heading">
+        <div>
+          <span className="eyebrow">WORKSPACE</span>
+          <h1>내 프로젝트</h1>
+          <p>담당하는 라벨링 프로젝트를 선택해 작업 현황을 확인하세요.</p>
+        </div>
+        <button className="primary" onClick={() => openEditor(null)}>
+          <Plus size={17} /> 프로젝트 추가
+        </button>
+      </div>
+      {items.length === 0 ? (
+        <div className="empty">
+          <Folder size={40} />
+          <h2>아직 등록된 프로젝트가 없어요</h2>
+          <p>Label Studio 프로젝트 ID로 첫 프로젝트를 등록해 보세요.</p>
+          <button className="primary" onClick={() => openEditor(null)}>
+            <Plus size={16} /> 프로젝트 추가
+          </button>
+        </div>
+      ) : (
+        <div className="project-grid">
+          {items.map((project) => (
+            <div className="project-card" key={project.id}>
+              <div className="project-card-top">
+                <div className="folder">
+                  <Folder size={22} />
+                </div>
+                <div className="project-controls">
+                  <button
+                    className="icon-button"
+                    title="프로젝트 수정"
+                    aria-label={`${project.name} 수정`}
+                    onClick={() => openEditor(project)}
+                  >
+                    <Pencil size={17} />
+                  </button>
+                  <button
+                    className="icon-button danger-icon"
+                    title="프로젝트 삭제"
+                    aria-label={`${project.name} 삭제`}
+                    onClick={() => {
+                      setDeleting(project);
+                      setConfirmation('');
+                      setError('');
+                    }}
+                  >
+                    <Trash2 size={17} />
+                  </button>
+                </div>
+              </div>
+              <Link
+                className="project-card-link"
+                to={`/projects/${project.id}`}
+              >
+                <h2>{project.name}</h2>
+                <span className="muted">
+                  Project ID {project.labelStudioProjectId}
+                  {project.gameName && ` · ${project.gameName}`}
+                </span>
+                <div className="card-footer">
+                  <div>
+                    <small>최근 누적 Region</small>
+                    <strong>
+                      {project.id && stats[project.id]
+                        ? stats[project.id].totalRegions.toLocaleString()
+                        : '—'}
+                    </strong>
+                  </div>
+                  <span className="muted">
+                    {project.id && stats[project.id]
+                      ? stats[project.id].recordDate
+                      : '기록 없음'}
+                  </span>
+                  <ArrowRight size={18} />
+                </div>
+              </Link>
+            </div>
+          ))}
+        </div>
+      )}
+      {editing !== undefined && (
+        <div
+          className="overlay"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setEditing(undefined);
+          }}
+        >
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={editing ? '프로젝트 수정' : '프로젝트 추가'}
+          >
+            <div className="modal-title">
+              <h2>{editing ? '프로젝트 수정' : '프로젝트 추가'}</h2>
+              <button
+                className="icon-button"
+                onClick={() => setEditing(undefined)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <label>
+              프로젝트명 *
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="예: RAFT 오디오 라벨링"
+              />
+            </label>
+            <label>
+              Label Studio 프로젝트 ID *
+              <input
+                type="number"
+                min="1"
+                value={lsId}
+                disabled={!!editing}
+                onChange={(e) => setLsId(e.target.value)}
+                placeholder="예: 54"
+              />
+            </label>
+            <label>
+              게임명 (선택)
+              <input
+                value={game}
+                onChange={(e) => setGame(e.target.value)}
+                placeholder="예: RAFT"
+              />
+            </label>
+            <label>
+              설명 (선택)
+              <textarea
+                value={desc}
+                onChange={(e) => setDesc(e.target.value)}
+                placeholder="프로젝트 메모"
+              />
+            </label>
+            {editing && (
+              <p className="muted">
+                기존 기록 보호를 위해 Label Studio 프로젝트 ID는 수정할 수
+                없습니다.
+              </p>
+            )}
+            {error && <p className="error">{error}</p>}
+            <div className="actions">
+              <button
+                className="secondary"
+                onClick={() => setEditing(undefined)}
+              >
+                취소
+              </button>
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={() => void submitProject()}
+              >
+                {busy ? '저장 중...' : editing ? '변경 사항 저장' : '추가하기'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {deleting && (
+        <div
+          className="overlay"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setDeleting(null);
+          }}
+        >
+          <div
+            className="modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="프로젝트 영구 삭제 확인"
+          >
+            <div className="modal-title">
+              <h2>프로젝트 영구 삭제</h2>
+              <button className="icon-button" onClick={() => setDeleting(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <p className="delete-warning">
+              <strong>{deleting.name}</strong> 프로젝트와 모든 날짜별 분석 기록,
+              Task별 집계, Annotation 선택 이력이 영구 삭제됩니다. 되돌릴 수
+              없습니다.
+            </p>
+            <label>
+              삭제하려면 아래 문구를 정확히 입력하세요.
+              <div className="confirmation-text">delete {deleting.name}</div>
+              <input
+                autoComplete="off"
+                spellCheck={false}
+                value={confirmation}
+                onChange={(e) => setConfirmation(e.target.value)}
+                placeholder={`delete ${deleting.name}`}
+              />
+            </label>
+            {error && <p className="error">{error}</p>}
+            <div className="actions">
+              <button className="secondary" onClick={() => setDeleting(null)}>
+                취소
+              </button>
+              <button
+                className="delete-button"
+                disabled={busy || confirmation !== `delete ${deleting.name}`}
+                onClick={() => void deleteProject()}
+              >
+                {busy ? '삭제 중...' : '프로젝트 영구 삭제'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
-function Analyze({project,refresh,latest}:{project:Project;refresh:()=>void;latest?:Snapshot}){
- const [date,setDate]=useState(()=>new Date().toLocaleDateString('sv-SE'));
- const [fileName,setFileName]=useState('');const [tasks,setTasks]=useState<Task[]>([]);const [drafts,setDrafts]=useState<number[]>([]);
- const [error,setError]=useState('');const [status,setStatus]=useState('');const [choices,setChoices]=useState<Record<number,number>>({});
- const [review,setReview]=useState<number[]>([]);const [saving,setSaving]=useState(false);const [members,setMembers]=useState<ProjectMember[]>([]);const [autoChanges,setAutoChanges]=useState<{taskId:number;oldAnnotationId:number;newAnnotationId:number;oldUserId:number|null;newUserId:number|null;oldRegions:number|null;newRegions:number}[]>([]);
- async function upload(file?:File){if(!file)return;setError('');setStatus('');setTasks([]);setDrafts([]);setChoices({});setReview([]);setAutoChanges([]);setFileName(file.name);
-  try{const raw=JSON.parse(await file.text()) as unknown;const result=inspectExport(raw,project.labelStudioProjectId);setTasks(result.tasks);setDrafts(result.draftTaskIds);
-   if(result.draftTaskIds.length){setStatus('Draft가 발견되어 분석을 진행할 수 없습니다. Label Studio에서 확인한 뒤 다시 업로드하세요.');return}
-   // Export에서 확인된 제출자/수정자 ID를 프로젝트에 자동 등록한다. 기존 이름과 역할은 보존한다.
-   const foundIds=new Set<number>();for(const task of result.tasks)for(const a of task.annotations??[]){if(typeof a.completed_by==='number')foundIds.add(a.completed_by);if(typeof a.updated_by==='number')foundIds.add(a.updated_by)}
-   await db.transaction('rw',db.projectMembers,async()=>{for(const id of foundIds){const found=await db.projectMembers.where('[projectId+labelStudioUserId]').equals([project.id!,id]).first();if(!found)await db.projectMembers.add({projectId:project.id!,labelStudioUserId:id,name:'',role:'worker'})}});
-   const currentMembers=await db.projectMembers.where('projectId').equals(project.id!).toArray();setMembers(currentMembers);
-   const stored=await db.annotationChoices.where('projectId').equals(project.id!).toArray();
-   const saved=new Map(stored.map(row=>[row.taskId,row.annotationId]));
-   // v0.2 이전 기록에 다중 Annotation만 저장되어 있던 경우도 복구한다.
-   const previousSnapshots=await db.snapshots.where('projectId').equals(project.id!).toArray();
-   previousSnapshots.sort((a,b)=>b.recordDate.localeCompare(a.recordDate)||b.uploadedAt.localeCompare(a.uploadedAt));
-   for(const snapshot of previousSnapshots){const rows=await db.taskRegions.where('snapshotId').equals(snapshot.id!).toArray();for(const row of rows){if(row.annotationId!==null&&!saved.has(row.taskId))saved.set(row.taskId,row.annotationId)}}
-   const selections:Record<number,number>={};const needsReview:number[]=[];
-   const changes:{taskId:number;oldAnnotationId:number;newAnnotationId:number;oldUserId:number|null;newUserId:number|null;oldRegions:number|null;newRegions:number}[]=[];
-   const latestSnapshot=previousSnapshots[0];const priorRows=latestSnapshot?await db.taskRegions.where('snapshotId').equals(latestSnapshot.id!).toArray():[];
-   const priorByTask=new Map(priorRows.map(r=>[r.taskId,r]));
-   for(const task of result.tasks){const candidates=(task.annotations??[]).filter(a=>!a.was_cancelled);const oldId=saved.get(task.id);
-    if(oldId!==undefined){if(candidates.some(a=>a.id===oldId)){selections[task.id]=oldId}else if(candidates.length===1){const next=candidates[0];selections[task.id]=next.id;const previous=priorByTask.get(task.id);changes.push({taskId:task.id,oldAnnotationId:oldId,newAnnotationId:next.id,oldUserId:previous?.completedBy??null,newUserId:next.completed_by??null,oldRegions:previous?.regionCount??null,newRegions:next.result?.length??0})}else if(candidates.length>1){needsReview.push(task.id)}}
-    else if(candidates.length===1){selections[task.id]=candidates[0].id}else if(candidates.length>1){needsReview.push(task.id)}
-   }
-   setChoices(selections);setReview(needsReview);setAutoChanges(changes);
-  }catch(e){setError(e instanceof Error?e.message:'파일을 분석하지 못했습니다.')}
- }
- const memberName=(id:number|null|undefined)=>{if(id==null)return '미상';const m=members.find(m=>m.labelStudioUserId===id);return m?.name?`${m.name} (#${id})`:`작업자 #${id}`};
- const multi=tasks.map(task=>({task,candidates:(task.annotations??[]).filter(a=>!a.was_cancelled)})).filter(item=>item.candidates.length>1);
- const unresolved=multi.filter(item=>!choices[item.task.id]||review.includes(item.task.id));
- const selectedRows=tasks.map(task=>{const candidates=(task.annotations??[]).filter(a=>!a.was_cancelled);const chosen=candidates.find(a=>a.id===choices[task.id]);return {taskId:task.id,annotationId:chosen?.id??null,completedBy:chosen?.completed_by??null,regionCount:chosen?.result?.length??0}});
- const total=selectedRows.reduce((sum,row)=>sum+row.regionCount,0);
- async function save(){if(!tasks.length||drafts.length||unresolved.length||!date)return;setSaving(true);setError('');try{
-  await db.transaction('rw',db.snapshots,db.taskRegions,db.annotationChoices,async()=>{
-   const snapshotId=await db.snapshots.add({projectId:project.id!,recordDate:date,uploadedAt:new Date().toISOString(),fileName,totalTasks:tasks.length,totalRegions:total,zeroRegionTasks:selectedRows.filter(r=>r.regionCount===0).length});
-   await db.taskRegions.bulkAdd(selectedRows.map(row=>({...row,snapshotId})));
-   // 모든 Task의 선택을 저장한다. 단일 Annotation에서 다중으로 바뀌어도 기존 선택을 유지한다.
-   for(const task of tasks){const candidates=(task.annotations??[]).filter(a=>!a.was_cancelled);const annotationId=choices[task.id];if(annotationId===undefined)continue;
-    const existing=await db.annotationChoices.where('[projectId+taskId]').equals([project.id!,task.id]).first();
-    await db.annotationChoices.put({...(existing?.id!==undefined?{id:existing.id}:{}),projectId:project.id!,taskId:task.id,annotationId,knownAnnotationIds:candidates.map(a=>a.id)});
-   }
-  });setStatus('분석 결과를 저장했습니다.');setTasks([]);refresh();
- }catch(e){setError(e instanceof Error?e.message:'저장에 실패했습니다.')}finally{setSaving(false)}}
- return <section className="panel"><h2>JSON 업로드 및 분석</h2><p>Label Studio에서 Export한 프로젝트 전체 JSON을 업로드하세요.</p><div className="form-row"><label>기록 날짜<input type="date" value={date} onChange={e=>setDate(e.target.value)}/></label><label className="file-picker"><UploadCloud size={19}/> JSON 파일 선택<input type="file" accept=".json,application/json" onChange={e=>void upload(e.target.files?.[0])}/></label></div>{fileName&&<p className="filename"><FileJson size={16}/>{fileName}</p>}{error&&<p className="error">{error}</p>}{status&&<p className={drafts.length?'warning':'success'}>{status}</p>}{drafts.length>0&&<div className="notice"><h3>Draft가 있는 Task · {drafts.length}개</h3><p>{drafts.join(', ')}</p><button className="secondary" onClick={()=>void navigator.clipboard.writeText(drafts.join('\n'))}>Task ID 복사</button></div>}
- {tasks.length>0&&drafts.length===0&&<><div className="metrics"><Metric label="전체 Task" value={tasks.length.toLocaleString()}/><Metric label="누적 Region" value={total.toLocaleString()}/><Metric label="Region 0개 Task" value={selectedRows.filter(r=>r.regionCount===0).length.toLocaleString()}/><Metric label="이전 기록 대비" value={latest?`${total-latest.totalRegions>=0?'+':''}${(total-latest.totalRegions).toLocaleString()}`:'기준값'}/></div>
- {autoChanges.length>0&&<div className="auto-change-panel"><h3><AlertTriangle size={18}/> 집계 대상 자동 변경 ({autoChanges.length}개 Task)</h3><p>이전에 선택한 Annotation이 사라져 남아 있는 유효 Annotation 1개를 자동 적용했어요. 작업자 변경 여부를 확인해 주세요.</p>{autoChanges.map(change=><div className="auto-change-item" key={change.taskId}><strong>Task #{change.taskId}</strong><div className="auto-change-grid"><div><small>이전 집계</small><b>Annotation #{change.oldAnnotationId}</b><span>{memberName(change.oldUserId)}</span><span>Region {change.oldRegions??'확인 불가'}개</span></div><div><small>현재 집계</small><b>Annotation #{change.newAnnotationId}</b><span>{memberName(change.newUserId)}</span><span>Region {change.newRegions}개</span></div></div>{change.oldUserId!==change.newUserId&&<p className="warning">집계 작업자가 변경되었어요.</p>}</div>)}</div>}
- {multi.length>0&&<div className="review"><h3>다중 Annotation 확인 ({multi.length}개 Task)</h3><p>이전에 집계한 Annotation은 새 후보가 추가되어도 그대로 유지됩니다. 처음 발견된 다중 Annotation 또는 기존 선택이 사라진 Task만 선택해 주세요.</p>{multi.map(({task,candidates})=><div className="review-item" key={task.id}><div className="review-heading"><strong>Task #{task.id}</strong><span>{review.includes(task.id)?'선택 필요':choices[task.id]?'이전 선택 적용':'선택 필요'}</span></div>{candidates.map((a:Annotation)=><label className="option" key={a.id}><input type="radio" name={`task-${task.id}`} disabled={!review.includes(task.id)} checked={choices[task.id]===a.id} onChange={()=>{setChoices(prev=>({...prev,[task.id]:a.id}));setReview(prev=>prev.filter(id=>id!==task.id))}}/><span>Annotation #{a.id} · 제출자 {memberName(a.completed_by)} · 수정자 {memberName(a.updated_by)} · Region {a.result?.length??0}개</span>{choices[task.id]===a.id&&!review.includes(task.id)&&<span className="auto-choice">적용 중</span>}</label>)}</div>)}</div>}
- <div className="actions"><span className="muted">{unresolved.length?`${unresolved.length}개 Task 선택 필요`:'모든 검사 완료'}</span><button className="primary" disabled={saving||unresolved.length>0} onClick={()=>void save()}><CheckCircle2 size={17}/>{saving?'저장 중...':'분석 결과 저장'}</button></div></>}
- </section>
+function ProjectShell() {
+  const { projectId } = useParams();
+  const [project, setProject] = useState<Project>();
+  useEffect(() => {
+    void db.projects.get(Number(projectId)).then(setProject);
+  }, [projectId]);
+  if (!project)
+    return (
+      <div className="content">
+        <p>프로젝트를 불러오는 중이거나 존재하지 않습니다.</p>
+        <Link to="/">프로젝트 목록으로</Link>
+      </div>
+    );
+  return <ProjectPage project={project} />;
 }
-export default function App(){return <div className="app"><aside className="sidebar"><Link className="brand" to="/"><div className="brand-icon"><FileJson size={20}/></div><span>Audio Labeling<br/>Tracker</span></Link><nav><NavLink to="/" className={({isActive})=>isActive?'nav active':'nav'}><Folder size={17}/> 프로젝트</NavLink></nav><div className="version">MVP · v0.4</div></aside><main><Routes><Route path="/" element={<ProjectHome/>}/><Route path="/projects/:projectId/*" element={<ProjectShell/>}/><Route path="*" element={<ProjectHome/>}/></Routes></main></div>}
+function ProjectPage({ project }: { project: Project }) {
+  const [tab, setTab] = useState<
+    'dashboard' | 'analyze' | 'history' | 'members'
+  >('dashboard');
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const refresh = () =>
+    db.snapshots
+      .where('projectId')
+      .equals(project.id!)
+      .toArray()
+      .then(setSnapshots);
+  useEffect(() => {
+    void refresh();
+  }, [project.id]);
+  const ordered = [...snapshots].sort(
+    (a, b) =>
+      a.recordDate.localeCompare(b.recordDate) ||
+      a.uploadedAt.localeCompare(b.uploadedAt),
+  );
+  const perDay = new Map<string, Snapshot>();
+  ordered.forEach((s) => perDay.set(s.recordDate, s));
+  const days = [...perDay.values()];
+  const latest = days.at(-1);
+  const previous = days.at(-2);
+  return (
+    <div className="content">
+      <Link to="/" className="back">
+        <ArrowLeft size={16} /> 모든 프로젝트
+      </Link>
+      <div className="heading">
+        <div>
+          <span className="eyebrow">
+            PROJECT {project.labelStudioProjectId}
+          </span>
+          <h1>{project.name}</h1>
+          <p>
+            {project.description || project.gameName || '프로젝트 작업 현황'}
+          </p>
+        </div>
+        <button className="primary" onClick={() => setTab('analyze')}>
+          <UploadCloud size={17} /> JSON 업로드
+        </button>
+      </div>
+      <div className="tabs">
+        <button
+          className={tab === 'dashboard' ? 'active' : ''}
+          onClick={() => setTab('dashboard')}
+        >
+          <LayoutDashboard size={17} /> 대시보드
+        </button>
+        <button
+          className={tab === 'analyze' ? 'active' : ''}
+          onClick={() => setTab('analyze')}
+        >
+          <FileJson size={17} /> JSON 분석
+        </button>
+        <button
+          className={tab === 'history' ? 'active' : ''}
+          onClick={() => setTab('history')}
+        >
+          <History size={17} /> 기록 조회
+        </button>
+        <button
+          className={tab === 'members' ? 'active' : ''}
+          onClick={() => setTab('members')}
+        >
+          <Users size={17} /> 작업자 관리
+        </button>
+      </div>
+      {tab === 'dashboard' && (
+        <>
+          <div className="metrics">
+            <Metric
+              label="누적 Region"
+              value={latest?.totalRegions.toLocaleString() ?? '—'}
+            />
+            <Metric
+              label="최근 순증감"
+              value={
+                latest
+                  ? previous
+                    ? `${latest.totalRegions - previous.totalRegions >= 0 ? '+' : ''}${(latest.totalRegions - previous.totalRegions).toLocaleString()}`
+                    : '기준값'
+                  : '—'
+              }
+              tone={
+                latest && previous
+                  ? latest.totalRegions > previous.totalRegions
+                    ? 'positive'
+                    : latest.totalRegions < previous.totalRegions
+                      ? 'negative'
+                      : 'neutral'
+                  : 'neutral'
+              }
+            />
+            <Metric
+              label="전체 Task"
+              value={latest?.totalTasks.toLocaleString() ?? '—'}
+            />
+            <Metric
+              label="Region 0개 Task"
+              value={latest?.zeroRegionTasks.toLocaleString() ?? '—'}
+            />
+          </div>
+          <section className="panel">
+            <h2>최근 기록</h2>
+            {latest ? (
+              <p>
+                {latest.recordDate} 기준 · {latest.fileName}
+              </p>
+            ) : (
+              <div className="empty-small">
+                <p>아직 분석 기록이 없어요.</p>
+                <button className="primary" onClick={() => setTab('analyze')}>
+                  첫 JSON 업로드
+                </button>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+      {tab === 'analyze' && (
+        <Analyze project={project} refresh={refresh} latest={latest} />
+      )}
+      {tab === 'members' && <ProjectMembers project={project} />}{' '}
+      {tab === 'history' && <HistoryPanel project={project} days={days} />}
+    </div>
+  );
+}
+function HistoryPanel({
+  project,
+  days,
+}: {
+  project: Project;
+  days: Snapshot[];
+}) {
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState<number | null>(null);
+  async function download(snapshot: Snapshot, index: number) {
+    if (!snapshot.id) return;
+    setBusy(snapshot.id);
+    setError('');
+    try {
+      const previous = days[index - 1];
+      const [rows, previousRows, members] = await Promise.all([
+        db.taskRegions.where('snapshotId').equals(snapshot.id).toArray(),
+        previous?.id
+          ? db.taskRegions.where('snapshotId').equals(previous.id).toArray()
+          : Promise.resolve(undefined),
+        db.projectMembers.where('projectId').equals(project.id!).toArray(),
+      ]);
+      await downloadDetailExcel({
+        project,
+        snapshot,
+        rows,
+        previousRows,
+        previousTotal: previous?.totalRegions,
+        members,
+        history: days.slice(0, index + 1),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '다운로드에 실패했습니다.');
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <section className="panel">
+      <h2>기록 조회</h2>
+      {error && <p className="error">{error}</p>}
+      {days.length === 0 ? (
+        <p>저장된 기록이 없습니다.</p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>기록 날짜</th>
+                <th>업로드 시간</th>
+                <th>전체 Task</th>
+                <th>누적 Region</th>
+                <th>순증감</th>
+                <th>Region 0개</th>
+                <th>Excel</th>
+              </tr>
+            </thead>
+            <tbody>
+              {days
+                .map((s, i) => ({ s, i }))
+                .reverse()
+                .map(({ s, i }) => {
+                  const prior = days[i - 1];
+                  return (
+                    <tr key={s.id}>
+                      <td>{s.recordDate}</td>
+                      <td>{new Date(s.uploadedAt).toLocaleString('ko-KR')}</td>
+                      <td>{s.totalTasks.toLocaleString()}</td>
+                      <td>{s.totalRegions.toLocaleString()}</td>
+                      <td>
+                        {prior
+                          ? (
+                              s.totalRegions - prior.totalRegions
+                            ).toLocaleString()
+                          : '기준값'}
+                      </td>
+                      <td>{s.zeroRegionTasks}</td>
+                      <td>
+                        <button
+                          className="secondary"
+                          disabled={busy !== null}
+                          onClick={() => void download(s, i)}
+                        >
+                          {busy === s.id ? '생성 중...' : 'Excel 다운로드'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+function Metric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: 'positive' | 'negative' | 'neutral';
+}) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong className={tone ? `delta-${tone}` : undefined}>{value}</strong>
+    </div>
+  );
+}
+function ProjectMembers({ project }: { project: Project }) {
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [userId, setUserId] = useState('');
+  const [name, setName] = useState('');
+  const [role, setRole] = useState<ProjectMember['role']>('worker');
+  const [editing, setEditing] = useState<number | null>(null);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const refresh = () =>
+    db.projectMembers
+      .where('projectId')
+      .equals(project.id!)
+      .sortBy('labelStudioUserId')
+      .then(setMembers);
+  useEffect(() => {
+    void refresh();
+  }, [project.id]);
+  const reset = () => {
+    setEditing(null);
+    setUserId('');
+    setName('');
+    setRole('worker');
+  };
+  const edit = (member: ProjectMember) => {
+    setEditing(member.id!);
+    setUserId(String(member.labelStudioUserId));
+    setName(member.name);
+    setRole(member.role);
+    setError('');
+    setNotice('');
+  };
+  async function saveMember() {
+    setError('');
+    setNotice('');
+    const id = Number(userId);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      setError('올바른 Label Studio 사용자 ID를 입력해 주세요.');
+      return;
+    }
+    try {
+      const existing = await db.projectMembers
+        .where('[projectId+labelStudioUserId]')
+        .equals([project.id!, id])
+        .first();
+      if (existing && existing.id !== editing) {
+        setError('이 프로젝트에 이미 등록된 사용자 ID입니다.');
+        return;
+      }
+      const member = {
+        projectId: project.id!,
+        labelStudioUserId: id,
+        name: name.trim(),
+        role,
+      };
+      if (editing !== null) await db.projectMembers.update(editing, member);
+      else await db.projectMembers.add(member);
+      reset();
+      await refresh();
+      setNotice('작업자 정보가 저장되었습니다.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '저장에 실패했습니다.');
+    }
+  }
+  async function removeMember(member: ProjectMember) {
+    if (
+      !window.confirm(
+        `작업자 #${member.labelStudioUserId}의 이름과 역할 정보를 삭제할까요?\n기존 분석 기록은 삭제되지 않습니다.`,
+      )
+    )
+      return;
+    try {
+      await db.projectMembers.delete(member.id!);
+      await refresh();
+      if (editing === member.id) reset();
+      setNotice('등록 정보가 삭제되었습니다.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '삭제 실패');
+    }
+  }
+  const roleText = (r: ProjectMember['role']) =>
+    r === 'pl' ? 'PL' : r === 'both' ? '작업자 · PL' : '작업자';
+  return (
+    <section className="panel">
+      <h2>작업자 관리</h2>
+      <p>
+        JSON에서 발견된 사용자 ID를 자동 등록해요. 이름과 역할은 이 프로젝트에만
+        저장됩니다.
+      </p>
+      <div className="member-summary">
+        등록된 사용자 <strong>{members.length}명</strong> · 이름 미등록{' '}
+        <strong>{members.filter((m) => !m.name).length}명</strong>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Label Studio ID</th>
+              <th>표시 이름</th>
+              <th>역할</th>
+              <th>관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            {members.length ? (
+              members.map((member) => (
+                <tr key={member.id}>
+                  <td>#{member.labelStudioUserId}</td>
+                  <td>
+                    {member.name || <span className="muted">미등록</span>}
+                  </td>
+                  <td>{roleText(member.role)}</td>
+                  <td>
+                    <div className="member-actions">
+                      <button
+                        className="secondary"
+                        onClick={() => edit(member)}
+                      >
+                        <Pencil size={14} /> 수정
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={() => void removeMember(member)}
+                      >
+                        <Trash2 size={14} /> 삭제
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={4} className="muted">
+                  아직 등록된 사용자가 없어요. JSON을 업로드하거나 직접 등록해
+                  주세요.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="member-form">
+        <h3>{editing !== null ? '사용자 수정' : '사용자 직접 등록'}</h3>
+        <div className="member-fields">
+          <label>
+            Label Studio ID
+            <input
+              type="number"
+              min="1"
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
+              placeholder="예: 30"
+            />
+          </label>
+          <label>
+            표시 이름
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="예: 홍길동 (선택)"
+            />
+          </label>
+          <label>
+            역할
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as ProjectMember['role'])}
+            >
+              <option value="worker">작업자</option>
+              <option value="pl">PL</option>
+              <option value="both">작업자 · PL</option>
+            </select>
+          </label>
+        </div>
+        <div className="actions">
+          {editing !== null && (
+            <button className="secondary" onClick={reset}>
+              수정 취소
+            </button>
+          )}
+          <button className="primary" onClick={() => void saveMember()}>
+            <Plus size={16} />
+            {editing !== null ? '변경 사항 저장' : '사용자 등록'}
+          </button>
+        </div>
+        {error && <p className="error">{error}</p>}
+        {notice && <p className="success">{notice}</p>}
+      </div>
+      <p className="member-hint">
+        참고: 역할은 표시용 정보이며 Region 실적은 항상 Annotation의 최초
+        제출자(completed_by)에게 귀속돼요.
+      </p>
+    </section>
+  );
+}
+function Analyze({
+  project,
+  refresh,
+  latest,
+}: {
+  project: Project;
+  refresh: () => void;
+  latest?: Snapshot;
+}) {
+  const [date, setDate] = useState(() =>
+    new Date().toLocaleDateString('sv-SE'),
+  );
+  const [fileName, setFileName] = useState('');
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [drafts, setDrafts] = useState<number[]>([]);
+  const [error, setError] = useState('');
+  const [status, setStatus] = useState('');
+  const [choices, setChoices] = useState<Record<number, number>>({});
+  const [review, setReview] = useState<number[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [autoChanges, setAutoChanges] = useState<
+    {
+      taskId: number;
+      oldAnnotationId: number;
+      newAnnotationId: number;
+      oldUserId: number | null;
+      newUserId: number | null;
+      oldRegions: number | null;
+      newRegions: number;
+    }[]
+  >([]);
+  async function upload(file?: File) {
+    if (!file) return;
+    setError('');
+    setStatus('');
+    setTasks([]);
+    setDrafts([]);
+    setChoices({});
+    setReview([]);
+    setAutoChanges([]);
+    setFileName(file.name);
+    try {
+      const raw = JSON.parse(await file.text()) as unknown;
+      const result = inspectExport(raw, project.labelStudioProjectId);
+      setTasks(result.tasks);
+      setDrafts(result.draftTaskIds);
+      if (result.draftTaskIds.length) {
+        setStatus(
+          'Draft가 발견되어 분석을 진행할 수 없습니다. Label Studio에서 확인한 뒤 다시 업로드하세요.',
+        );
+        return;
+      }
+      // Export에서 확인된 제출자/수정자 ID를 프로젝트에 자동 등록한다. 기존 이름과 역할은 보존한다.
+      const foundIds = new Set<number>();
+      for (const task of result.tasks)
+        for (const a of task.annotations ?? []) {
+          if (typeof a.completed_by === 'number') foundIds.add(a.completed_by);
+          if (typeof a.updated_by === 'number') foundIds.add(a.updated_by);
+        }
+      await db.transaction('rw', db.projectMembers, async () => {
+        for (const id of foundIds) {
+          const found = await db.projectMembers
+            .where('[projectId+labelStudioUserId]')
+            .equals([project.id!, id])
+            .first();
+          if (!found)
+            await db.projectMembers.add({
+              projectId: project.id!,
+              labelStudioUserId: id,
+              name: '',
+              role: 'worker',
+            });
+        }
+      });
+      const currentMembers = await db.projectMembers
+        .where('projectId')
+        .equals(project.id!)
+        .toArray();
+      setMembers(currentMembers);
+      const stored = await db.annotationChoices
+        .where('projectId')
+        .equals(project.id!)
+        .toArray();
+      const saved = new Map(
+        stored.map((row) => [row.taskId, row.annotationId]),
+      );
+      // v0.2 이전 기록에 다중 Annotation만 저장되어 있던 경우도 복구한다.
+      const previousSnapshots = await db.snapshots
+        .where('projectId')
+        .equals(project.id!)
+        .toArray();
+      previousSnapshots.sort(
+        (a, b) =>
+          b.recordDate.localeCompare(a.recordDate) ||
+          b.uploadedAt.localeCompare(a.uploadedAt),
+      );
+      for (const snapshot of previousSnapshots) {
+        const rows = await db.taskRegions
+          .where('snapshotId')
+          .equals(snapshot.id!)
+          .toArray();
+        for (const row of rows) {
+          if (row.annotationId !== null && !saved.has(row.taskId))
+            saved.set(row.taskId, row.annotationId);
+        }
+      }
+      const selections: Record<number, number> = {};
+      const needsReview: number[] = [];
+      const changes: {
+        taskId: number;
+        oldAnnotationId: number;
+        newAnnotationId: number;
+        oldUserId: number | null;
+        newUserId: number | null;
+        oldRegions: number | null;
+        newRegions: number;
+      }[] = [];
+      const latestSnapshot = previousSnapshots[0];
+      const priorRows = latestSnapshot
+        ? await db.taskRegions
+            .where('snapshotId')
+            .equals(latestSnapshot.id!)
+            .toArray()
+        : [];
+      const priorByTask = new Map(priorRows.map((r) => [r.taskId, r]));
+      for (const task of result.tasks) {
+        const candidates = (task.annotations ?? []).filter(
+          (a) => !a.was_cancelled,
+        );
+        const oldId = saved.get(task.id);
+        if (oldId !== undefined) {
+          if (candidates.some((a) => a.id === oldId)) {
+            selections[task.id] = oldId;
+          } else if (candidates.length === 1) {
+            const next = candidates[0];
+            selections[task.id] = next.id;
+            const previous = priorByTask.get(task.id);
+            changes.push({
+              taskId: task.id,
+              oldAnnotationId: oldId,
+              newAnnotationId: next.id,
+              oldUserId: previous?.completedBy ?? null,
+              newUserId: next.completed_by ?? null,
+              oldRegions: previous?.regionCount ?? null,
+              newRegions: next.result?.length ?? 0,
+            });
+          } else if (candidates.length > 1) {
+            needsReview.push(task.id);
+          }
+        } else if (candidates.length === 1) {
+          selections[task.id] = candidates[0].id;
+        } else if (candidates.length > 1) {
+          needsReview.push(task.id);
+        }
+      }
+      setChoices(selections);
+      setReview(needsReview);
+      setAutoChanges(changes);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '파일을 분석하지 못했습니다.');
+    }
+  }
+  const memberName = (id: number | null | undefined) => {
+    if (id == null) return '미상';
+    const m = members.find((m) => m.labelStudioUserId === id);
+    return m?.name ? `${m.name} (#${id})` : `작업자 #${id}`;
+  };
+  const multi = tasks
+    .map((task) => ({
+      task,
+      candidates: (task.annotations ?? []).filter((a) => !a.was_cancelled),
+    }))
+    .filter((item) => item.candidates.length > 1);
+  const unresolved = multi.filter(
+    (item) => choices[item.task.id] === undefined,
+  );
+  const selectedRows = tasks.map((task) => {
+    const candidates = (task.annotations ?? []).filter((a) => !a.was_cancelled);
+    const chosen = candidates.find((a) => a.id === choices[task.id]);
+    return {
+      taskId: task.id,
+      annotationId: chosen?.id ?? null,
+      completedBy: chosen?.completed_by ?? null,
+      updatedBy: chosen?.updated_by ?? null,
+      updatedAt: chosen?.updated_at ?? null,
+      regionCount: chosen?.result?.length ?? 0,
+    };
+  });
+  const total = selectedRows.reduce((sum, row) => sum + row.regionCount, 0);
+  async function downloadPreview() {
+    if (!tasks.length || drafts.length || unresolved.length) return;
+    setError('');
+    try {
+      const previousRows = latest?.id
+        ? await db.taskRegions.where('snapshotId').equals(latest.id).toArray()
+        : undefined;
+      const history = await db.snapshots
+        .where('projectId')
+        .equals(project.id!)
+        .toArray();
+      const perDay = new Map<string, Snapshot>();
+      history
+        .sort(
+          (a, b) =>
+            a.recordDate.localeCompare(b.recordDate) ||
+            a.uploadedAt.localeCompare(b.uploadedAt),
+        )
+        .forEach((s) => perDay.set(s.recordDate, s));
+      const snapshot = {
+        recordDate: date,
+        fileName,
+        totalTasks: tasks.length,
+        totalRegions: total,
+        zeroRegionTasks: selectedRows.filter((r) => r.regionCount === 0).length,
+      };
+      await downloadDetailExcel({
+        project,
+        snapshot,
+        rows: selectedRows,
+        previousRows,
+        previousTotal: latest?.totalRegions,
+        members,
+        history: [...perDay.values()]
+          .filter((s) => s.recordDate < date)
+          .concat([
+            {
+              ...snapshot,
+              projectId: project.id!,
+              uploadedAt: new Date().toISOString(),
+            },
+          ]),
+      });
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Excel 다운로드에 실패했습니다.',
+      );
+    }
+  }
+  async function save() {
+    if (!tasks.length || drafts.length || unresolved.length || !date) return;
+    setSaving(true);
+    setError('');
+    try {
+      await db.transaction(
+        'rw',
+        db.snapshots,
+        db.taskRegions,
+        db.annotationChoices,
+        async () => {
+          const snapshotId = await db.snapshots.add({
+            projectId: project.id!,
+            recordDate: date,
+            uploadedAt: new Date().toISOString(),
+            fileName,
+            totalTasks: tasks.length,
+            totalRegions: total,
+            zeroRegionTasks: selectedRows.filter((r) => r.regionCount === 0)
+              .length,
+          });
+          if (snapshotId === undefined)
+            throw new Error('분석 기록 ID를 생성하지 못했습니다.');
+          await db.taskRegions.bulkAdd(
+            selectedRows.map((row) => ({ ...row, snapshotId })),
+          );
+          // 모든 Task의 선택을 저장한다. 단일 Annotation에서 다중으로 바뀌어도 기존 선택을 유지한다.
+          for (const task of tasks) {
+            const candidates = (task.annotations ?? []).filter(
+              (a) => !a.was_cancelled,
+            );
+            const annotationId = choices[task.id];
+            if (annotationId === undefined) continue;
+            const existing = await db.annotationChoices
+              .where('[projectId+taskId]')
+              .equals([project.id!, task.id])
+              .first();
+            await db.annotationChoices.put({
+              ...(existing?.id !== undefined ? { id: existing.id } : {}),
+              projectId: project.id!,
+              taskId: task.id,
+              annotationId,
+              knownAnnotationIds: candidates.map((a) => a.id),
+            });
+          }
+        },
+      );
+      setStatus('분석 결과를 저장했습니다.');
+      setTasks([]);
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '저장에 실패했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <section className="panel">
+      <h2>JSON 업로드 및 분석</h2>
+      <p>Label Studio에서 Export한 프로젝트 전체 JSON을 업로드하세요.</p>
+      <div className="form-row">
+        <label>
+          기록 날짜
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+        </label>
+        <label className="file-picker">
+          <UploadCloud size={19} /> JSON 파일 선택
+          <input
+            type="file"
+            accept=".json,application/json"
+            onChange={(e) => void upload(e.target.files?.[0])}
+          />
+        </label>
+      </div>
+      {fileName && (
+        <p className="filename">
+          <FileJson size={16} />
+          {fileName}
+        </p>
+      )}
+      {error && <p className="error">{error}</p>}
+      {status && (
+        <p className={drafts.length ? 'warning' : 'success'}>{status}</p>
+      )}
+      {drafts.length > 0 && (
+        <div className="notice">
+          <h3>Draft가 있는 Task · {drafts.length}개</h3>
+          <p>{drafts.join(', ')}</p>
+          <button
+            className="secondary"
+            onClick={() =>
+              void navigator.clipboard.writeText(drafts.join('\n'))
+            }
+          >
+            Task ID 복사
+          </button>
+          <button
+            className="secondary"
+            onClick={() => void downloadDraftExcel(project, date, drafts)}
+          >
+            Draft 목록 Excel 다운로드
+          </button>
+        </div>
+      )}
+      {tasks.length > 0 && drafts.length === 0 && (
+        <>
+          <div className="metrics">
+            <Metric label="전체 Task" value={tasks.length.toLocaleString()} />
+            <Metric label="누적 Region" value={total.toLocaleString()} />
+            <Metric
+              label="Region 0개 Task"
+              value={selectedRows
+                .filter((r) => r.regionCount === 0)
+                .length.toLocaleString()}
+            />
+            <Metric
+              label="이전 기록 대비"
+              value={
+                latest
+                  ? `${total - latest.totalRegions >= 0 ? '+' : ''}${(total - latest.totalRegions).toLocaleString()}`
+                  : '기준값'
+              }
+              tone={
+                latest
+                  ? total > latest.totalRegions
+                    ? 'positive'
+                    : total < latest.totalRegions
+                      ? 'negative'
+                      : 'neutral'
+                  : 'neutral'
+              }
+            />
+          </div>
+          {autoChanges.length > 0 && (
+            <div className="auto-change-panel">
+              <h3>
+                <AlertTriangle size={18} /> 집계 대상 자동 변경 (
+                {autoChanges.length}개 Task)
+              </h3>
+              <p>
+                이전에 선택한 Annotation이 사라져 남아 있는 유효 Annotation
+                1개를 자동 적용했어요. 작업자 변경 여부를 확인해 주세요.
+              </p>
+              {autoChanges.map((change) => (
+                <div className="auto-change-item" key={change.taskId}>
+                  <strong>Task #{change.taskId}</strong>
+                  <div className="auto-change-grid">
+                    <div className="previous-annotation">
+                      <small>이전 집계</small>
+                      <b>Annotation #{change.oldAnnotationId}</b>
+                      <span>{memberName(change.oldUserId)}</span>
+                      <span>Region {change.oldRegions ?? '확인 불가'}개</span>
+                    </div>
+                    <div
+                      className="current-annotation"
+                      style={{
+                        background: '#fff',
+                        border: '2px solid #2563eb',
+                      }}
+                    >
+                      <small style={{ color: '#2563eb', fontWeight: 700 }}>
+                        현재 집계
+                      </small>
+                      <b>Annotation #{change.newAnnotationId}</b>
+                      <span>{memberName(change.newUserId)}</span>
+                      <span
+                        className="region-count"
+                        style={{ color: '#2563eb', fontWeight: 700 }}
+                      >
+                        Region {change.newRegions}개
+                      </span>
+                    </div>
+                  </div>
+                  {change.oldUserId !== change.newUserId && (
+                    <p className="warning">집계 작업자가 변경되었어요.</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {multi.length > 0 && (
+            <div className="review">
+              <h3>다중 Annotation 확인 ({multi.length}개 Task)</h3>
+              <p>
+                이전에 집계한 Annotation은 새 후보가 추가되어도 그대로
+                유지됩니다. 처음 발견된 다중 Annotation 또는 기존 선택이 사라진
+                Task만 선택해 주세요. 선택은 분석 결과를 저장하기 전까지
+                자유롭게 변경할 수 있습니다.
+              </p>
+              {multi.map(({ task, candidates }) => (
+                <div className="review-item" key={task.id}>
+                  <div className="review-heading">
+                    <strong>Task #{task.id}</strong>
+                    <span>
+                      {review.includes(task.id)
+                        ? choices[task.id] === undefined
+                          ? '선택 필요'
+                          : '선택 완료 · 변경 가능'
+                        : '이전 선택 적용'}
+                    </span>
+                  </div>
+                  {candidates.map((a: Annotation) => (
+                    <label className="option" key={a.id}>
+                      <input
+                        type="radio"
+                        name={`task-${task.id}`}
+                        disabled={!review.includes(task.id)}
+                        checked={choices[task.id] === a.id}
+                        onChange={() =>
+                          setChoices((prev) => ({ ...prev, [task.id]: a.id }))
+                        }
+                      />
+                      <span>
+                        Annotation #{a.id} · 제출자 {memberName(a.completed_by)}{' '}
+                        · 수정자 {memberName(a.updated_by)} · Region{' '}
+                        {a.result?.length ?? 0}개
+                      </span>
+                      {choices[task.id] === a.id && (
+                        <span className="auto-choice">
+                          {review.includes(task.id) ? '현재 선택' : '적용 중'}
+                        </span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="actions">
+            <span className="muted">
+              {unresolved.length
+                ? `${unresolved.length}개 Task 선택 필요`
+                : '모든 검사 완료'}
+            </span>
+            <button
+              className="secondary"
+              disabled={saving || unresolved.length > 0}
+              onClick={() => void downloadPreview()}
+            >
+              상세 분석 Excel 다운로드
+            </button>
+            <button
+              className="primary"
+              disabled={saving || unresolved.length > 0}
+              onClick={() => void save()}
+            >
+              <CheckCircle2 size={17} />
+              {saving ? '저장 중...' : '분석 결과 저장'}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+export default function App() {
+  return (
+    <div className="app">
+      <aside className="sidebar">
+        <Link className="brand" to="/">
+          <div className="brand-icon">
+            <FileJson size={20} />
+          </div>
+          <span>
+            Audio Labeling
+            <br />
+            Tracker
+          </span>
+        </Link>
+        <nav>
+          <NavLink
+            to="/"
+            className={({ isActive }) => (isActive ? 'nav active' : 'nav')}
+          >
+            <Folder size={17} /> 프로젝트
+          </NavLink>
+        </nav>
+        <div className="version">MVP · v0.4</div>
+      </aside>
+      <main>
+        <Routes>
+          <Route path="/" element={<ProjectHome />} />
+          <Route path="/projects/:projectId/*" element={<ProjectShell />} />
+          <Route path="*" element={<ProjectHome />} />
+        </Routes>
+      </main>
+    </div>
+  );
+}
