@@ -128,11 +128,15 @@ function ProjectHome() {
             .where('projectId')
             .equals(id)
             .primaryKeys();
-          for (const snapshotId of snaps)
+          for (const snapshotId of snaps) {
+            if (snapshotId === undefined) {
+              continue;
+            }
             await db.taskRegions
               .where('snapshotId')
               .equals(snapshotId)
               .delete();
+          }
           await db.snapshots.where('projectId').equals(id).delete();
           await db.annotationChoices.where('projectId').equals(id).delete();
           await db.projectMembers.where('projectId').equals(id).delete();
@@ -400,7 +404,8 @@ function ProjectPage({ project }: { project: Project }) {
   const ordered = [...snapshots].sort(
     (a, b) =>
       a.recordDate.localeCompare(b.recordDate) ||
-      a.uploadedAt.localeCompare(b.uploadedAt),
+      a.uploadedAt.localeCompare(b.uploadedAt) ||
+      (a.id ?? 0) - (b.id ?? 0),
   );
   const perDay = new Map<string, Snapshot>();
   ordered.forEach((s) => perDay.set(s.recordDate, s));
@@ -508,16 +513,20 @@ function ProjectPage({ project }: { project: Project }) {
         <Analyze project={project} refresh={refresh} latest={latest} />
       )}
       {tab === 'members' && <ProjectMembers project={project} />}{' '}
-      {tab === 'history' && <HistoryPanel project={project} days={days} />}
+      {tab === 'history' && (
+        <HistoryPanel project={project} days={days} allSnapshots={ordered} />
+      )}
     </div>
   );
 }
 function HistoryPanel({
   project,
   days,
+  allSnapshots,
 }: {
   project: Project;
   days: Snapshot[];
+  allSnapshots: Snapshot[];
 }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<number | null>(null);
@@ -526,7 +535,17 @@ function HistoryPanel({
     setBusy(snapshot.id);
     setError('');
     try {
-      const previous = days[index - 1];
+      const historyToDate = allSnapshots.filter(
+        (s) =>
+          s.recordDate < snapshot.recordDate ||
+          (s.recordDate === snapshot.recordDate &&
+            (s.uploadedAt < snapshot.uploadedAt ||
+              (s.uploadedAt === snapshot.uploadedAt &&
+                (s.id ?? 0) <= (snapshot.id ?? 0)))),
+      );
+      const previous = days
+        .filter((s) => s.recordDate < snapshot.recordDate)
+        .at(-1);
       const [rows, previousRows, members] = await Promise.all([
         db.taskRegions.where('snapshotId').equals(snapshot.id).toArray(),
         previous?.id
@@ -541,7 +560,7 @@ function HistoryPanel({
         previousRows,
         previousTotal: previous?.totalRegions,
         members,
-        history: days.slice(0, index + 1),
+        history: historyToDate,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : '다운로드에 실패했습니다.');
@@ -553,7 +572,7 @@ function HistoryPanel({
     <section className="panel">
       <h2>기록 조회</h2>
       {error && <p className="error">{error}</p>}
-      {days.length === 0 ? (
+      {allSnapshots.length === 0 ? (
         <p>저장된 기록이 없습니다.</p>
       ) : (
         <div className="table-wrap">
@@ -570,11 +589,13 @@ function HistoryPanel({
               </tr>
             </thead>
             <tbody>
-              {days
+              {allSnapshots
                 .map((s, i) => ({ s, i }))
                 .reverse()
                 .map(({ s, i }) => {
-                  const prior = days[i - 1];
+                  const prior = days
+                    .filter((d) => d.recordDate < s.recordDate)
+                    .at(-1);
                   return (
                     <tr key={s.id}>
                       <td>{s.recordDate}</td>
@@ -913,7 +934,8 @@ function Analyze({
       previousSnapshots.sort(
         (a, b) =>
           b.recordDate.localeCompare(a.recordDate) ||
-          b.uploadedAt.localeCompare(a.uploadedAt),
+          b.uploadedAt.localeCompare(a.uploadedAt) ||
+          (b.id ?? 0) - (a.id ?? 0),
       );
       for (const snapshot of previousSnapshots) {
         const rows = await db.taskRegions
@@ -995,25 +1017,43 @@ function Analyze({
   const unresolved = multi.filter(
     (item) => choices[item.task.id] === undefined,
   );
-  const selectedRows = tasks.map((task) => {
+  const selectedRows = tasks.flatMap((task) => {
     const candidates = (task.annotations ?? []).filter((a) => !a.was_cancelled);
     const chosen = candidates.find((a) => a.id === choices[task.id]);
-    return {
-      taskId: task.id,
-      annotationId: chosen?.id ?? null,
-      completedBy: chosen?.completed_by ?? null,
-      updatedBy: chosen?.updated_by ?? null,
-      updatedAt: chosen?.updated_at ?? null,
-      regionCount: chosen?.result?.length ?? 0,
-    };
+    return chosen
+      ? [
+          {
+            taskId: task.id,
+            annotationId: chosen.id,
+            completedBy: chosen.completed_by ?? null,
+            updatedBy: chosen.updated_by ?? null,
+            updatedAt: chosen.updated_at ?? null,
+            regionCount: chosen.result?.length ?? 0,
+          },
+        ]
+      : [];
   });
   const total = selectedRows.reduce((sum, row) => sum + row.regionCount, 0);
   async function downloadPreview() {
     if (!tasks.length || drafts.length || unresolved.length) return;
     setError('');
     try {
-      const previousRows = latest?.id
-        ? await db.taskRegions.where('snapshotId').equals(latest.id).toArray()
+      const earlier = await db.snapshots
+        .where('projectId')
+        .equals(project.id!)
+        .toArray();
+      const previousForDate = earlier
+        .filter((s) => s.recordDate < date)
+        .sort(
+          (a, b) =>
+            b.recordDate.localeCompare(a.recordDate) ||
+            b.uploadedAt.localeCompare(a.uploadedAt),
+        )[0];
+      const previousRows = previousForDate?.id
+        ? await db.taskRegions
+            .where('snapshotId')
+            .equals(previousForDate.id)
+            .toArray()
         : undefined;
       const history = await db.snapshots
         .where('projectId')
@@ -1030,7 +1070,7 @@ function Analyze({
       const snapshot = {
         recordDate: date,
         fileName,
-        totalTasks: tasks.length,
+        totalTasks: selectedRows.length,
         totalRegions: total,
         zeroRegionTasks: selectedRows.filter((r) => r.regionCount === 0).length,
       };
@@ -1039,7 +1079,7 @@ function Analyze({
         snapshot,
         rows: selectedRows,
         previousRows,
-        previousTotal: latest?.totalRegions,
+        previousTotal: previousForDate?.totalRegions,
         members,
         history: [...perDay.values()]
           .filter((s) => s.recordDate < date)
@@ -1073,7 +1113,7 @@ function Analyze({
             recordDate: date,
             uploadedAt: new Date().toISOString(),
             fileName,
-            totalTasks: tasks.length,
+            totalTasks: selectedRows.length,
             totalRegions: total,
             zeroRegionTasks: selectedRows.filter((r) => r.regionCount === 0)
               .length,
@@ -1168,7 +1208,10 @@ function Analyze({
       {tasks.length > 0 && drafts.length === 0 && (
         <>
           <div className="metrics">
-            <Metric label="전체 Task" value={tasks.length.toLocaleString()} />
+            <Metric
+              label="전체 Task"
+              value={selectedRows.length.toLocaleString()}
+            />
             <Metric label="누적 Region" value={total.toLocaleString()} />
             <Metric
               label="Region 0개 Task"
