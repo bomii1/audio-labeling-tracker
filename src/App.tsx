@@ -1037,12 +1037,43 @@ function Analyze({
     }
   }
   async function save() {
-    if (!tasks.length || !date) return;
+    if (!tasks.length || !date || saving) return;
     setSaving(true);
     setError('');
     try {
+      const key: [number, string] = [project.id!, date];
+      const existing = await db.snapshots
+        .where('[projectId+recordDate]')
+        .equals(key)
+        .first();
+
+      if (
+        existing &&
+        !window.confirm(
+          `${date} 날짜에 이미 저장된 기록이 있습니다.\n기존 분석 기록을 새 결과로 변경하시겠습니까?`,
+        )
+      ) {
+        return;
+      }
+
       await db.transaction('rw', db.snapshots, db.taskRegions, async () => {
-        const snapshotId = await db.snapshots.add({
+        // 확인 이후에도 저장 직전의 실제 상태를 다시 조회한다.
+        const current = await db.snapshots
+          .where('[projectId+recordDate]')
+          .equals(key)
+          .first();
+        if (current && !existing) {
+          throw new Error(
+            '다른 저장 작업으로 해당 날짜의 기록이 생성되었습니다. 다시 저장해 주세요.',
+          );
+        }
+        if (current && existing && current.id !== existing.id) {
+          throw new Error(
+            '해당 날짜의 기록이 변경되었습니다. 다시 저장해 주세요.',
+          );
+        }
+
+        const values = {
           projectId: project.id!,
           recordDate: date,
           uploadedAt: new Date().toISOString(),
@@ -1050,18 +1081,36 @@ function Analyze({
           totalTasks,
           totalRegions: total,
           zeroRegionTasks,
-        });
-        if (snapshotId === undefined)
-          throw new Error('분석 기록 ID를 생성하지 못했습니다.');
-        await db.taskRegions.bulkAdd(
-          selectedRows.map((row) => ({ ...row, snapshotId })),
-        );
+        };
+        let snapshotId: number;
+        if (current?.id !== undefined) {
+          snapshotId = current.id;
+          await db.snapshots.update(snapshotId, values);
+          await db.taskRegions.where('snapshotId').equals(snapshotId).delete();
+        } else {
+          const newSnapshotId = await db.snapshots.add(values);
+
+          if (newSnapshotId === undefined) {
+            throw new Error('Snapshot ID를 생성하지 못했습니다.');
+          }
+
+          snapshotId = newSnapshotId;
+        }
+        if (selectedRows.length) {
+          await db.taskRegions.bulkAdd(
+            selectedRows.map((row) => ({ ...row, snapshotId })),
+          );
+        }
       });
-      setStatus('분석 결과를 저장했습니다.');
+      setStatus(
+        existing
+          ? '기존 날짜의 분석 기록을 변경했습니다.'
+          : '분석 결과를 저장했습니다.',
+      );
       setTasks([]);
       setDrafts([]);
       setShowAllDrafts(false);
-      refresh();
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : '저장에 실패했습니다.');
     } finally {

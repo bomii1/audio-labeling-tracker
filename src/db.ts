@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
+
 export type Project = {
   id?: number;
   labelStudioProjectId: number;
@@ -48,7 +49,7 @@ export const db = new Dexie('audioLabelingTracker') as Dexie & {
   annotationChoices: EntityTable<AnnotationChoice, 'id'>;
   projectMembers: EntityTable<ProjectMember, 'id'>;
 };
-// v1 데이터를 보존하면서 작업자 관리 테이블만 추가합니다.
+
 db.version(1).stores({
   projects: '++id,&labelStudioProjectId,name',
   snapshots: '++id,projectId,recordDate,uploadedAt',
@@ -58,6 +59,52 @@ db.version(1).stores({
 db.version(2).stores({
   projects: '++id,&labelStudioProjectId,name',
   snapshots: '++id,projectId,recordDate,uploadedAt',
+  taskRegions: '++id,snapshotId,[snapshotId+taskId]',
+  annotationChoices: '++id,&[projectId+taskId]',
+  projectMembers:
+    '++id,&[projectId+labelStudioUserId],projectId,labelStudioUserId',
+});
+
+// 기존 같은 날짜의 중복 기록은 최신 업로드 하나만 남긴다.
+// 고유 인덱스를 만들기 전에 별도 버전에서 정리해야 마이그레이션이 안전하다.
+db.version(3)
+  .stores({
+    projects: '++id,&labelStudioProjectId,name',
+    snapshots: '++id,projectId,recordDate,uploadedAt,[projectId+recordDate]',
+    taskRegions: '++id,snapshotId,[snapshotId+taskId]',
+    annotationChoices: '++id,&[projectId+taskId]',
+    projectMembers:
+      '++id,&[projectId+labelStudioUserId],projectId,labelStudioUserId',
+  })
+  .upgrade(async (tx) => {
+    const snapshots = (await tx.table('snapshots').toArray()) as Snapshot[];
+    const latestByDate = new Map<string, Snapshot>();
+    const sorted = snapshots.sort(
+      (a, b) =>
+        a.uploadedAt.localeCompare(b.uploadedAt) || (a.id ?? 0) - (b.id ?? 0),
+    );
+    for (const snapshot of sorted) {
+      latestByDate.set(
+        JSON.stringify([snapshot.projectId, snapshot.recordDate]),
+        snapshot,
+      );
+    }
+    const keepIds = new Set([...latestByDate.values()].map((s) => s.id));
+    for (const snapshot of snapshots) {
+      if (snapshot.id === undefined || keepIds.has(snapshot.id)) continue;
+      await tx
+        .table('taskRegions')
+        .where('snapshotId')
+        .equals(snapshot.id)
+        .delete();
+      await tx.table('snapshots').delete(snapshot.id);
+    }
+  });
+
+// 프로젝트별 날짜 하나만 허용하는 데이터베이스 제약.
+db.version(4).stores({
+  projects: '++id,&labelStudioProjectId,name',
+  snapshots: '++id,projectId,recordDate,uploadedAt,&[projectId+recordDate]',
   taskRegions: '++id,snapshotId,[snapshotId+taskId]',
   annotationChoices: '++id,&[projectId+taskId]',
   projectMembers:
