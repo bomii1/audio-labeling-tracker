@@ -578,7 +578,7 @@ function HistoryPanel({
                 <th>누적 Region</th>
                 <th>순증감</th>
                 <th>Region 0개</th>
-                <th>Excel</th>
+                <th>Download</th>
               </tr>
             </thead>
             <tbody>
@@ -847,6 +847,7 @@ function Analyze({
   const [fileName, setFileName] = useState('');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [drafts, setDrafts] = useState<number[]>([]);
+  const [showAllDrafts, setShowAllDrafts] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
@@ -856,6 +857,7 @@ function Analyze({
     setError('');
     setStatus('');
     setTasks([]);
+    setShowAllDrafts(false);
     setDrafts([]);
     setFileName(file.name);
     try {
@@ -865,9 +867,8 @@ function Analyze({
       setDrafts(result.draftTaskIds);
       if (result.draftTaskIds.length) {
         setStatus(
-          'Draft가 발견되어 분석을 진행할 수 없습니다. Label Studio에서 확인한 뒤 다시 업로드하세요.',
+          'Draft가 발견되었습니다. Draft는 집계에서 제외하고 완료된 Annotation만 분석합니다.',
         );
-        return;
       }
       // Export에서 확인된 제출자/수정자 ID를 프로젝트에 자동 등록한다. 기존 이름과 역할은 보존한다.
       const foundIds = new Set<number>();
@@ -960,7 +961,7 @@ function Analyze({
     };
   }, [project.id, date, latest]);
   async function downloadPreview() {
-    if (!tasks.length || drafts.length) return;
+    if (!tasks.length) return;
     setError('');
     try {
       const earlier = await db.snapshots
@@ -1025,7 +1026,7 @@ function Analyze({
     }
   }
   async function save() {
-    if (!tasks.length || drafts.length || !date) return;
+    if (!tasks.length || !date) return;
     setSaving(true);
     setError('');
     try {
@@ -1047,6 +1048,8 @@ function Analyze({
       });
       setStatus('분석 결과를 저장했습니다.');
       setTasks([]);
+      setDrafts([]);
+      setShowAllDrafts(false);
       refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : '저장에 실패했습니다.');
@@ -1083,30 +1086,122 @@ function Analyze({
         </p>
       )}
       {error && <p className="error">{error}</p>}
-      {status && (
-        <p className={drafts.length ? 'warning' : 'success'}>{status}</p>
+      {status && !(drafts.length > 0 && tasks.length > 0) && (
+        <p
+          className={
+            tasks.length > 0 && drafts.length > 0 ? 'warning' : 'success'
+          }
+        >
+          {status}
+        </p>
       )}
-      {drafts.length > 0 && (
-        <div className="notice">
-          <h3>Draft가 있는 Task · {drafts.length}개</h3>
-          <p>{drafts.join(', ')}</p>
-          <button
-            className="secondary"
-            onClick={() =>
-              void navigator.clipboard.writeText(drafts.join('\n'))
-            }
-          >
-            Task ID 복사
-          </button>
-          <button
-            className="secondary"
-            onClick={() => void downloadDraftExcel(project, date, drafts)}
-          >
-            Draft 목록 Excel 다운로드
-          </button>
+      {tasks.length > 0 && (drafts.length > 0 || multi.length > 0) && (
+        <div
+          className="analysis-notices"
+          style={{
+            border: '1px solid #e6d4b5',
+            background: '#fffbf3',
+            borderRadius: 14,
+            padding: '20px 24px',
+            margin: '24px 0',
+          }}
+        >
+          <AlertTriangle
+            size={20}
+            color="#86580f"
+            aria-label="분석 시 확인 사항"
+            style={{ marginBottom: 16 }}
+          />
+          {drafts.length > 0 && (
+            <div>
+              <h4
+                style={{ margin: '0 0 10px', fontSize: 14, color: '#86580f' }}
+              >
+                Draft가 있는 Task · {drafts.length}개
+              </h4>
+              <div
+                className="multi-annotation-tasks"
+                style={{ marginBottom: 14 }}
+              >
+                {(showAllDrafts ? drafts : drafts.slice(0, 5)).map((taskId) => (
+                  <span className="multi-annotation-tag" key={taskId}>
+                    #{taskId}
+                  </span>
+                ))}
+                {drafts.length > 5 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllDrafts((current) => !current)}
+                    style={{
+                      border: '1px solid #ead3ac',
+                      borderRadius: 8,
+                      padding: '4px 10px',
+                      background: '#fff9ed',
+                      color: '#86580f',
+                      fontSize: 12,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {showAllDrafts ? '접기' : `${drafts.length - 5}개 더 보기`}
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    void navigator.clipboard.writeText(drafts.join('\\n'))
+                  }
+                >
+                  Task ID 복사
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => void downloadDraftExcel(project, date, drafts)}
+                >
+                  Draft 목록 다운로드
+                </button>
+              </div>
+            </div>
+          )}
+          {drafts.length > 0 && multi.length > 0 && (
+            <hr
+              style={{
+                border: 0,
+                borderTop: '1px solid #eadfce',
+                margin: '20px 0',
+              }}
+            />
+          )}
+          {multi.length > 0 && (
+            <div>
+              <h4
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  margin: '0 0 10px',
+                  fontSize: 14,
+                  color: '#86580f',
+                }}
+              >
+                다중 Annotation Task · {multi.length}개
+              </h4>
+              <div className="multi-annotation-tasks">
+                {multi.map(({ task }) => (
+                  <span className="multi-annotation-tag" key={task.id}>
+                    #{task.id}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          <p style={{ margin: '16px 0 0', fontSize: 12, color: '#786a58' }}>
+            Draft는 제외하고 모든 유효 Annotation을 집계했습니다.
+          </p>
         </div>
       )}
-      {tasks.length > 0 && drafts.length === 0 && (
+      {tasks.length > 0 && (
         <>
           <div className="metrics">
             <Metric label="전체 Task" value={totalTasks.toLocaleString()} />
@@ -1139,29 +1234,6 @@ function Analyze({
               }
             />
           </div>
-          {multi.length > 0 && (
-            <div
-              className="multi-annotation-alert"
-              role="status"
-              aria-label="다중 Annotation 안내"
-            >
-              <h3 className="multi-annotation-title">
-                <AlertTriangle size={16} aria-hidden="true" />
-                다중 Annotation 발견 · {multi.length}개 Task
-              </h3>
-              <p className="multi-annotation-description">
-                여러 Annotation이 있는 Task입니다. 모든 유효 Annotation이
-                집계되었습니다.
-              </p>
-              <div className="multi-annotation-tasks">
-                {multi.map(({ task }) => (
-                  <span className="multi-annotation-tag" key={task.id}>
-                    #{task.id}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
           <div className="actions">
             <span className="muted">
               {multi.length > 0 ? '전체 집계 완료' : '모든 검사 완료'}

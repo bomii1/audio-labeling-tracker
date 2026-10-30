@@ -787,3 +787,8 @@ th {
   font-weight: 600;
   line-height: 1.4;
 }
+
+/* Draft 경고창과 분석 결과 사이 간격 */
+.draft-notice {
+  margin-bottom: 20px;
+}
