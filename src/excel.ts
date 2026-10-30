@@ -28,7 +28,7 @@ type ExportInput = {
 const C = {
   blue: '28558B',
   deep: '193F6A',
-  lightBlue: 'CADDEC',
+  lightBlue: 'DCE8F3',
   labelGray: 'F2F5F9',
   lightGray: 'F4F7FB',
   white: 'FFFFFF',
@@ -37,9 +37,9 @@ const C = {
   grid: 'E7ECF1',
   ink: '23354C',
   greenBg: 'E2F2E9',
-  green: '008A4B',
+  green: '176A45',
   redBg: 'FBE6E7',
-  red: 'C62842',
+  red: 'AD3440',
   muted: '63758B',
   blueText: '244C7D',
 } as const;
@@ -246,8 +246,7 @@ export async function downloadDetailExcel({
         bold: true,
         color: { argb: argb(C.ink) },
       };
-    if (i === 7 && typeof entry[1] === 'number')
-      styleDelta(row.getCell(2), entry[1]);
+    if (i === 7) styleDelta(row.getCell(2), entry[1]);
   }
 
   spacer(summary);
@@ -260,17 +259,17 @@ export async function downloadDetailExcel({
   );
   const totals = new Map<
     string,
-    { id: number | null; regions: number; tasks: number }
+    { id: number | null; regions: number; taskIds: Set<number> }
   >();
   for (const r of rows) {
     const key = r.completedBy == null ? 'unknown' : String(r.completedBy);
     const item = totals.get(key) ?? {
       id: r.completedBy ?? null,
       regions: 0,
-      tasks: 0,
+      taskIds: new Set<number>(),
     };
     item.regions += r.regionCount;
-    item.tasks++;
+    item.taskIds.add(r.taskId);
     totals.set(key, item);
   }
   for (const item of [...totals.values()].sort(
@@ -280,7 +279,7 @@ export async function downloadDetailExcel({
       item.id ?? '미상',
       memberLabel(item.id, members),
       item.regions,
-      item.tasks,
+      item.taskIds.size,
     ]);
     styleBody(row, 5, C.white, true);
     row.getCell(2).font = {
@@ -345,13 +344,21 @@ export async function downloadDetailExcel({
       bold: true,
       color: { argb: argb(C.ink) },
     };
+    row.getCell(5).font = {
+      name: fontName,
+      size: 12,
+      bold: true,
+      color: { argb: argb(C.ink) },
+    };
+    row.getCell(5).numFmt = '0';
     styleDelta(row.getCell(4), delta);
   });
   spacer(summary, 16);
   const note = summary.addRow([
     '참고',
-    '순증감에는 Region 수정 및 Annotation 집계 대상 변경이 반영될 수 있습니다.',
+    '순증감에는 Region 수정, Annotation 추가 및 삭제가 반영됩니다. 기존 단일 Annotation 집계 기록과는 기준이 다를 수 있습니다.',
   ]);
+  summary.mergeCells(note.number, 2, note.number, 5);
   styleBody(note, 5, C.lightGray);
   note.getCell(1).font = {
     name: fontName,
@@ -365,7 +372,7 @@ export async function downloadDetailExcel({
     horizontal: 'left',
     indent: 1,
   };
-  note.height = 42;
+  note.height = 54;
 
   const detail = wb.addWorksheet('Task 상세', {
     views: [{ state: 'frozen', ySplit: 1 }],
@@ -373,6 +380,7 @@ export async function downloadDetailExcel({
   detail.columns = [
     { width: 18 },
     { width: 18 },
+    { width: 20 },
     { width: 27 },
     { width: 18 },
     { width: 23 },
@@ -382,53 +390,44 @@ export async function downloadDetailExcel({
     detail.addRow([
       '작업자 ID',
       'Task ID',
+      'Annotation ID',
       '작업 날짜(KST)',
       'Region 수',
-      'Region 0개 여부',
+      'Region 0개 Task 여부',
       '비고',
     ]),
-    6,
+    7,
   );
-  for (const r of [...rows].sort((a, b) => a.taskId - b.taskId)) {
+  // Region 0개 Task는 Annotation별 0개 여부가 아니라 Task 전체의 Region 합계로 판정한다.
+  const regionsByTask = new Map<number, number>();
+  for (const r of rows) {
+    regionsByTask.set(
+      r.taskId,
+      (regionsByTask.get(r.taskId) ?? 0) + r.regionCount,
+    );
+  }
+  for (const r of [...rows].sort(
+    (a, b) =>
+      a.taskId - b.taskId || (a.annotationId ?? -1) - (b.annotationId ?? -1),
+  )) {
+    const isZeroTask = regionsByTask.get(r.taskId) === 0;
     const row = detail.addRow([
       r.completedBy ?? '',
       r.taskId,
+      r.annotationId ?? '',
       kst(r.updatedAt),
       r.regionCount,
-      r.regionCount === 0 ? 'Y' : 'N',
+      isZeroTask ? 'Y' : 'N',
       '',
     ]);
-    styleBody(row, 6, r.regionCount === 0 ? C.pink : C.yellow);
-    // Task 상세: 배경색과 어울리는 자연스러운 셀 구분선
-    const borderColor = r.regionCount === 0 ? 'E8C9CF' : 'E8DDB8';
-
-    for (let col = 1; col <= 6; col++) {
-      row.getCell(col).border = {
-        top: {
-          style: 'hair',
-          color: { argb: `FF${borderColor}` },
-        },
-        bottom: {
-          style: 'hair',
-          color: { argb: `FF${borderColor}` },
-        },
-        left: {
-          style: 'hair',
-          color: { argb: `FF${borderColor}` },
-        },
-        right: {
-          style: 'hair',
-          color: { argb: `FF${borderColor}` },
-        },
-      };
-    }
-    row.getCell(6).alignment = {
+    styleBody(row, 7, isZeroTask ? C.pink : C.yellow);
+    row.getCell(7).alignment = {
       horizontal: 'left',
       vertical: 'middle',
       wrapText: true,
     };
-    if (r.regionCount === 0) {
-      row.getCell(5).font = {
+    if (isZeroTask) {
+      row.getCell(6).font = {
         name: fontName,
         size: 12,
         bold: true,
@@ -436,7 +435,7 @@ export async function downloadDetailExcel({
       };
     }
   }
-  detail.autoFilter = { from: 'A1', to: `F${Math.max(1, detail.rowCount)}` };
+  detail.autoFilter = { from: 'A1', to: `G${Math.max(1, detail.rowCount)}` };
   await saveBook(
     wb,
     `${safeName(project.name)}_${snapshot.recordDate}_작업현황.xlsx`,

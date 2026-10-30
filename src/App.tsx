@@ -1,14 +1,7 @@
 import { useEffect, useState } from 'react';
-import {
-  Link,
-  NavLink,
-  Route,
-  Routes,
-  useNavigate,
-  useParams,
-} from 'react-router-dom';
+import { Link, NavLink, Route, Routes, useParams } from 'react-router-dom';
 import { db, type Project, type Snapshot, type ProjectMember } from './db';
-import { inspectExport, type Annotation, type Task } from './analysis';
+import { inspectExport, type Task } from './analysis';
 import { downloadDraftExcel, downloadDetailExcel } from './excel';
 import {
   ArrowLeft,
@@ -856,30 +849,14 @@ function Analyze({
   const [drafts, setDrafts] = useState<number[]>([]);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
-  const [choices, setChoices] = useState<Record<number, number>>({});
-  const [review, setReview] = useState<number[]>([]);
   const [saving, setSaving] = useState(false);
   const [members, setMembers] = useState<ProjectMember[]>([]);
-  const [autoChanges, setAutoChanges] = useState<
-    {
-      taskId: number;
-      oldAnnotationId: number;
-      newAnnotationId: number;
-      oldUserId: number | null;
-      newUserId: number | null;
-      oldRegions: number | null;
-      newRegions: number;
-    }[]
-  >([]);
   async function upload(file?: File) {
     if (!file) return;
     setError('');
     setStatus('');
     setTasks([]);
     setDrafts([]);
-    setChoices({});
-    setReview([]);
-    setAutoChanges([]);
     setFileName(file.name);
     try {
       const raw = JSON.parse(await file.text()) as unknown;
@@ -919,120 +896,39 @@ function Analyze({
         .equals(project.id!)
         .toArray();
       setMembers(currentMembers);
-      const stored = await db.annotationChoices
-        .where('projectId')
-        .equals(project.id!)
-        .toArray();
-      const saved = new Map(
-        stored.map((row) => [row.taskId, row.annotationId]),
-      );
-      // v0.2 이전 기록에 다중 Annotation만 저장되어 있던 경우도 복구한다.
-      const previousSnapshots = await db.snapshots
-        .where('projectId')
-        .equals(project.id!)
-        .toArray();
-      previousSnapshots.sort(
-        (a, b) =>
-          b.recordDate.localeCompare(a.recordDate) ||
-          b.uploadedAt.localeCompare(a.uploadedAt) ||
-          (b.id ?? 0) - (a.id ?? 0),
-      );
-      for (const snapshot of previousSnapshots) {
-        const rows = await db.taskRegions
-          .where('snapshotId')
-          .equals(snapshot.id!)
-          .toArray();
-        for (const row of rows) {
-          if (row.annotationId !== null && !saved.has(row.taskId))
-            saved.set(row.taskId, row.annotationId);
-        }
-      }
-      const selections: Record<number, number> = {};
-      const needsReview: number[] = [];
-      const changes: {
-        taskId: number;
-        oldAnnotationId: number;
-        newAnnotationId: number;
-        oldUserId: number | null;
-        newUserId: number | null;
-        oldRegions: number | null;
-        newRegions: number;
-      }[] = [];
-      const latestSnapshot = previousSnapshots[0];
-      const priorRows = latestSnapshot
-        ? await db.taskRegions
-            .where('snapshotId')
-            .equals(latestSnapshot.id!)
-            .toArray()
-        : [];
-      const priorByTask = new Map(priorRows.map((r) => [r.taskId, r]));
-      for (const task of result.tasks) {
-        const candidates = (task.annotations ?? []).filter(
-          (a) => !a.was_cancelled,
-        );
-        const oldId = saved.get(task.id);
-        if (oldId !== undefined) {
-          if (candidates.some((a) => a.id === oldId)) {
-            selections[task.id] = oldId;
-          } else if (candidates.length === 1) {
-            const next = candidates[0];
-            selections[task.id] = next.id;
-            const previous = priorByTask.get(task.id);
-            changes.push({
-              taskId: task.id,
-              oldAnnotationId: oldId,
-              newAnnotationId: next.id,
-              oldUserId: previous?.completedBy ?? null,
-              newUserId: next.completed_by ?? null,
-              oldRegions: previous?.regionCount ?? null,
-              newRegions: next.result?.length ?? 0,
-            });
-          } else if (candidates.length > 1) {
-            needsReview.push(task.id);
-          }
-        } else if (candidates.length === 1) {
-          selections[task.id] = candidates[0].id;
-        } else if (candidates.length > 1) {
-          needsReview.push(task.id);
-        }
-      }
-      setChoices(selections);
-      setReview(needsReview);
-      setAutoChanges(changes);
     } catch (e) {
       setError(e instanceof Error ? e.message : '파일을 분석하지 못했습니다.');
     }
   }
-  const memberName = (id: number | null | undefined) => {
-    if (id == null) return '미상';
-    const m = members.find((m) => m.labelStudioUserId === id);
-    return m?.name ? `${m.name} (#${id})` : `작업자 #${id}`;
-  };
   const multi = tasks
     .map((task) => ({
       task,
       candidates: (task.annotations ?? []).filter((a) => !a.was_cancelled),
     }))
     .filter((item) => item.candidates.length > 1);
-  const unresolved = multi.filter(
-    (item) => choices[item.task.id] === undefined,
+  const selectedRows = tasks.flatMap((task) =>
+    (task.annotations ?? [])
+      .filter((annotation) => !annotation.was_cancelled)
+      .map((annotation) => ({
+        taskId: task.id,
+        annotationId: annotation.id,
+        completedBy: annotation.completed_by ?? null,
+        updatedBy: annotation.updated_by ?? null,
+        updatedAt: annotation.updated_at ?? null,
+        regionCount: annotation.result?.length ?? 0,
+      })),
   );
-  const selectedRows = tasks.flatMap((task) => {
-    const candidates = (task.annotations ?? []).filter((a) => !a.was_cancelled);
-    const chosen = candidates.find((a) => a.id === choices[task.id]);
-    return chosen
-      ? [
-          {
-            taskId: task.id,
-            annotationId: chosen.id,
-            completedBy: chosen.completed_by ?? null,
-            updatedBy: chosen.updated_by ?? null,
-            updatedAt: chosen.updated_at ?? null,
-            regionCount: chosen.result?.length ?? 0,
-          },
-        ]
-      : [];
-  });
+  const totalTasks = new Set(selectedRows.map((row) => row.taskId)).size;
+
+  const zeroRegionTasks = [
+    ...new Set(selectedRows.map((row) => row.taskId)),
+  ].filter((taskId) =>
+    selectedRows
+      .filter((row) => row.taskId === taskId)
+      .every((row) => row.regionCount === 0),
+  ).length;
+
+  const totalAnnotations = selectedRows.length;
   const total = selectedRows.reduce((sum, row) => sum + row.regionCount, 0);
   const [previousForDate, setPreviousForDate] = useState<Snapshot>();
 
@@ -1064,7 +960,7 @@ function Analyze({
     };
   }, [project.id, date, latest]);
   async function downloadPreview() {
-    if (!tasks.length || drafts.length || unresolved.length) return;
+    if (!tasks.length || drafts.length) return;
     setError('');
     try {
       const earlier = await db.snapshots
@@ -1101,9 +997,9 @@ function Analyze({
       const snapshot = {
         recordDate: date,
         fileName,
-        totalTasks: selectedRows.length,
+        totalTasks,
         totalRegions: total,
-        zeroRegionTasks: selectedRows.filter((r) => r.regionCount === 0).length,
+        zeroRegionTasks,
       };
       await downloadDetailExcel({
         project,
@@ -1129,52 +1025,26 @@ function Analyze({
     }
   }
   async function save() {
-    if (!tasks.length || drafts.length || unresolved.length || !date) return;
+    if (!tasks.length || drafts.length || !date) return;
     setSaving(true);
     setError('');
     try {
-      await db.transaction(
-        'rw',
-        db.snapshots,
-        db.taskRegions,
-        db.annotationChoices,
-        async () => {
-          const snapshotId = await db.snapshots.add({
-            projectId: project.id!,
-            recordDate: date,
-            uploadedAt: new Date().toISOString(),
-            fileName,
-            totalTasks: selectedRows.length,
-            totalRegions: total,
-            zeroRegionTasks: selectedRows.filter((r) => r.regionCount === 0)
-              .length,
-          });
-          if (snapshotId === undefined)
-            throw new Error('분석 기록 ID를 생성하지 못했습니다.');
-          await db.taskRegions.bulkAdd(
-            selectedRows.map((row) => ({ ...row, snapshotId })),
-          );
-          // 모든 Task의 선택을 저장한다. 단일 Annotation에서 다중으로 바뀌어도 기존 선택을 유지한다.
-          for (const task of tasks) {
-            const candidates = (task.annotations ?? []).filter(
-              (a) => !a.was_cancelled,
-            );
-            const annotationId = choices[task.id];
-            if (annotationId === undefined) continue;
-            const existing = await db.annotationChoices
-              .where('[projectId+taskId]')
-              .equals([project.id!, task.id])
-              .first();
-            await db.annotationChoices.put({
-              ...(existing?.id !== undefined ? { id: existing.id } : {}),
-              projectId: project.id!,
-              taskId: task.id,
-              annotationId,
-              knownAnnotationIds: candidates.map((a) => a.id),
-            });
-          }
-        },
-      );
+      await db.transaction('rw', db.snapshots, db.taskRegions, async () => {
+        const snapshotId = await db.snapshots.add({
+          projectId: project.id!,
+          recordDate: date,
+          uploadedAt: new Date().toISOString(),
+          fileName,
+          totalTasks,
+          totalRegions: total,
+          zeroRegionTasks,
+        });
+        if (snapshotId === undefined)
+          throw new Error('분석 기록 ID를 생성하지 못했습니다.');
+        await db.taskRegions.bulkAdd(
+          selectedRows.map((row) => ({ ...row, snapshotId })),
+        );
+      });
       setStatus('분석 결과를 저장했습니다.');
       setTasks([]);
       refresh();
@@ -1239,16 +1109,15 @@ function Analyze({
       {tasks.length > 0 && drafts.length === 0 && (
         <>
           <div className="metrics">
+            <Metric label="전체 Task" value={totalTasks.toLocaleString()} />
             <Metric
-              label="전체 Task"
-              value={selectedRows.length.toLocaleString()}
+              label="전체 Annotation"
+              value={totalAnnotations.toLocaleString()}
             />
             <Metric label="누적 Region" value={total.toLocaleString()} />
             <Metric
               label="Region 0개 Task"
-              value={selectedRows
-                .filter((r) => r.regionCount === 0)
-                .length.toLocaleString()}
+              value={zeroRegionTasks.toLocaleString()}
             />
             <Metric
               label="이전 기록 대비"
@@ -1270,117 +1139,43 @@ function Analyze({
               }
             />
           </div>
-          {autoChanges.length > 0 && (
-            <div className="auto-change-panel">
-              <h3>
-                <AlertTriangle size={18} /> 집계 대상 자동 변경 (
-                {autoChanges.length}개 Task)
-              </h3>
-              <p>
-                이전에 선택한 Annotation이 사라져 남아 있는 유효 Annotation
-                1개를 자동 적용했어요. 작업자 변경 여부를 확인해 주세요.
-              </p>
-              {autoChanges.map((change) => (
-                <div className="auto-change-item" key={change.taskId}>
-                  <strong>Task #{change.taskId}</strong>
-                  <div className="auto-change-grid">
-                    <div className="previous-annotation">
-                      <small>이전 집계</small>
-                      <b>Annotation #{change.oldAnnotationId}</b>
-                      <span>{memberName(change.oldUserId)}</span>
-                      <span>Region {change.oldRegions ?? '확인 불가'}개</span>
-                    </div>
-                    <div
-                      className="current-annotation"
-                      style={{
-                        background: '#fff',
-                        border: '2px solid #2563eb',
-                      }}
-                    >
-                      <small style={{ color: '#2563eb', fontWeight: 700 }}>
-                        현재 집계
-                      </small>
-                      <b>Annotation #{change.newAnnotationId}</b>
-                      <span>{memberName(change.newUserId)}</span>
-                      <span
-                        className="region-count"
-                        style={{ color: '#2563eb', fontWeight: 700 }}
-                      >
-                        Region {change.newRegions}개
-                      </span>
-                    </div>
-                  </div>
-                  {change.oldUserId !== change.newUserId && (
-                    <p className="warning">집계 작업자가 변경되었어요.</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
           {multi.length > 0 && (
-            <div className="review">
-              <h3>다중 Annotation 확인 ({multi.length}개 Task)</h3>
-              <p>
-                이전에 집계한 Annotation은 새 후보가 추가되어도 그대로
-                유지됩니다. 처음 발견된 다중 Annotation 또는 기존 선택이 사라진
-                Task만 선택해 주세요. 선택은 분석 결과를 저장하기 전까지
-                자유롭게 변경할 수 있습니다.
+            <div
+              className="multi-annotation-alert"
+              role="status"
+              aria-label="다중 Annotation 안내"
+            >
+              <h3 className="multi-annotation-title">
+                <AlertTriangle size={16} aria-hidden="true" />
+                다중 Annotation 발견 · {multi.length}개 Task
+              </h3>
+              <p className="multi-annotation-description">
+                여러 Annotation이 있는 Task입니다. 모든 유효 Annotation이
+                집계되었습니다.
               </p>
-              {multi.map(({ task, candidates }) => (
-                <div className="review-item" key={task.id}>
-                  <div className="review-heading">
-                    <strong>Task #{task.id}</strong>
-                    <span>
-                      {review.includes(task.id)
-                        ? choices[task.id] === undefined
-                          ? '선택 필요'
-                          : '선택 완료 · 변경 가능'
-                        : '이전 선택 적용'}
-                    </span>
-                  </div>
-                  {candidates.map((a: Annotation) => (
-                    <label className="option" key={a.id}>
-                      <input
-                        type="radio"
-                        name={`task-${task.id}`}
-                        disabled={!review.includes(task.id)}
-                        checked={choices[task.id] === a.id}
-                        onChange={() =>
-                          setChoices((prev) => ({ ...prev, [task.id]: a.id }))
-                        }
-                      />
-                      <span>
-                        Annotation #{a.id} · 제출자 {memberName(a.completed_by)}{' '}
-                        · 수정자 {memberName(a.updated_by)} · Region{' '}
-                        {a.result?.length ?? 0}개
-                      </span>
-                      {choices[task.id] === a.id && (
-                        <span className="auto-choice">
-                          {review.includes(task.id) ? '현재 선택' : '적용 중'}
-                        </span>
-                      )}
-                    </label>
-                  ))}
-                </div>
-              ))}
+              <div className="multi-annotation-tasks">
+                {multi.map(({ task }) => (
+                  <span className="multi-annotation-tag" key={task.id}>
+                    #{task.id}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
           <div className="actions">
             <span className="muted">
-              {unresolved.length
-                ? `${unresolved.length}개 Task 선택 필요`
-                : '모든 검사 완료'}
+              {multi.length > 0 ? '전체 집계 완료' : '모든 검사 완료'}
             </span>
             <button
               className="secondary"
-              disabled={saving || unresolved.length > 0}
+              disabled={saving}
               onClick={() => void downloadPreview()}
             >
               상세 분석 Excel 다운로드
             </button>
             <button
               className="primary"
-              disabled={saving || unresolved.length > 0}
+              disabled={saving}
               onClick={() => void save()}
             >
               <CheckCircle2 size={17} />

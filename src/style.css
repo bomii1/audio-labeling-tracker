@@ -743,3 +743,47 @@ th {
     grid-template-columns: 1fr;
   }
 }
+
+/* Compact multi-annotation notice */
+.multi-annotation-alert {
+  margin: 18px 0;
+  padding: 15px 17px;
+  border: 1px solid #e8c78d;
+  border-radius: 11px;
+  background: #fffbf0;
+}
+
+.multi-annotation-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 7px;
+  color: #915b0b;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.multi-annotation-description {
+  margin: 0 0 11px;
+  color: #806747;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.multi-annotation-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.multi-annotation-tag {
+  padding: 4px 9px;
+  border: 1px solid #f0dab7;
+  border-radius: 6px;
+  background: #fff1d9;
+  color: #8a4a0c;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
