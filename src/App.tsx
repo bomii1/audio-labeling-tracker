@@ -845,6 +845,7 @@ function Analyze({
     new Date().toLocaleDateString('sv-SE'),
   );
   const [fileName, setFileName] = useState('');
+  const [fileInputKey, setFileInputKey] = useState(0);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [drafts, setDrafts] = useState<number[]>([]);
   const [showAllDrafts, setShowAllDrafts] = useState(false);
@@ -852,6 +853,16 @@ function Analyze({
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
   const [members, setMembers] = useState<ProjectMember[]>([]);
+  function clearSelectedFile() {
+    setFileName('');
+    setTasks([]);
+    setDrafts([]);
+    setShowAllDrafts(false);
+    setError('');
+    setStatus('');
+    setFileInputKey((key) => key + 1);
+  }
+
   async function upload(file?: File) {
     if (!file) return;
     setError('');
@@ -1073,6 +1084,7 @@ function Analyze({
         <label className="file-picker">
           <UploadCloud size={19} /> JSON 파일 선택
           <input
+            key={fileInputKey}
             type="file"
             accept=".json,application/json"
             onChange={(e) => void upload(e.target.files?.[0])}
@@ -1080,10 +1092,26 @@ function Analyze({
         </label>
       </div>
       {fileName && (
-        <p className="filename">
-          <FileJson size={16} />
-          {fileName}
-        </p>
+        <div className="selected-file">
+          <FileJson
+            size={18}
+            className="selected-file-icon"
+            aria-hidden="true"
+          />
+          <span className="selected-file-name" title={fileName}>
+            {fileName}
+          </span>
+          <button
+            type="button"
+            className="selected-file-clear"
+            aria-label="선택한 JSON 파일 제거"
+            title="파일 선택 취소"
+            onClick={clearSelectedFile}
+            disabled={saving}
+          >
+            <X size={17} />
+          </button>
+        </div>
       )}
       {error && <p className="error">{error}</p>}
       {status && !(drafts.length > 0 && tasks.length > 0) && (
