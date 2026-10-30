@@ -1034,6 +1034,35 @@ function Analyze({
       : [];
   });
   const total = selectedRows.reduce((sum, row) => sum + row.regionCount, 0);
+  const [previousForDate, setPreviousForDate] = useState<Snapshot>();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPrevious() {
+      const snapshots = await db.snapshots
+        .where('projectId')
+        .equals(project.id!)
+        .toArray();
+
+      const previous = snapshots
+        .filter((snapshot) => snapshot.recordDate < date)
+        .sort(
+          (a, b) =>
+            b.recordDate.localeCompare(a.recordDate) ||
+            b.uploadedAt.localeCompare(a.uploadedAt) ||
+            (b.id ?? 0) - (a.id ?? 0),
+        )[0];
+
+      if (!cancelled) setPreviousForDate(previous);
+    }
+
+    void loadPrevious();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id, date, latest]);
   async function downloadPreview() {
     if (!tasks.length || drafts.length || unresolved.length) return;
     setError('');
@@ -1047,7 +1076,8 @@ function Analyze({
         .sort(
           (a, b) =>
             b.recordDate.localeCompare(a.recordDate) ||
-            b.uploadedAt.localeCompare(a.uploadedAt),
+            b.uploadedAt.localeCompare(a.uploadedAt) ||
+            (b.id ?? 0) - (a.id ?? 0),
         )[0];
       const previousRows = previousForDate?.id
         ? await db.taskRegions
@@ -1064,7 +1094,8 @@ function Analyze({
         .sort(
           (a, b) =>
             a.recordDate.localeCompare(b.recordDate) ||
-            a.uploadedAt.localeCompare(b.uploadedAt),
+            a.uploadedAt.localeCompare(b.uploadedAt) ||
+            (a.id ?? 0) - (b.id ?? 0),
         )
         .forEach((s) => perDay.set(s.recordDate, s));
       const snapshot = {
@@ -1222,15 +1253,17 @@ function Analyze({
             <Metric
               label="이전 기록 대비"
               value={
-                latest
-                  ? `${total - latest.totalRegions >= 0 ? '+' : ''}${(total - latest.totalRegions).toLocaleString()}`
+                previousForDate
+                  ? `${total - previousForDate.totalRegions >= 0 ? '+' : ''}${(
+                      total - previousForDate.totalRegions
+                    ).toLocaleString()}`
                   : '기준값'
               }
               tone={
-                latest
-                  ? total > latest.totalRegions
+                previousForDate
+                  ? total > previousForDate.totalRegions
                     ? 'positive'
-                    : total < latest.totalRegions
+                    : total < previousForDate.totalRegions
                       ? 'negative'
                       : 'neutral'
                   : 'neutral'
