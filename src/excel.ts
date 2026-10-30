@@ -212,7 +212,6 @@ export async function downloadDetailExcel({
     ['기록 날짜', snapshot.recordDate],
     ['파일명', snapshot.fileName],
     ['전체 Task 수', snapshot.totalTasks],
-    ['전체 Annotation 수', rows.length],
     ['누적 Region 수', snapshot.totalRegions],
     ['Region 0개 Task 수', snapshot.zeroRegionTasks],
     [
@@ -247,8 +246,7 @@ export async function downloadDetailExcel({
         bold: true,
         color: { argb: argb(C.ink) },
       };
-    if (i === 7 && typeof entry[1] === 'number')
-      styleDelta(row.getCell(2), entry[1]);
+    if (i === 7) styleDelta(row.getCell(2), entry[1]);
   }
 
   spacer(summary);
@@ -338,8 +336,7 @@ export async function downloadDetailExcel({
       delta,
       s.zeroRegionTasks,
     ]);
-    styleBody(row, 5, C.white, true);
-    row.getCell(1).fill = fill(C.labelGray);
+    styleBody(row, 5, i % 2 === 0 ? C.white : C.lightGray, true);
     row.height = 34;
     row.getCell(3).font = {
       name: fontName,
@@ -347,6 +344,13 @@ export async function downloadDetailExcel({
       bold: true,
       color: { argb: argb(C.ink) },
     };
+    row.getCell(5).font = {
+      name: fontName,
+      size: 12,
+      bold: true,
+      color: { argb: argb(C.ink) },
+    };
+    row.getCell(5).numFmt = '0';
     styleDelta(row.getCell(4), delta);
   });
   spacer(summary, 16);
@@ -354,6 +358,7 @@ export async function downloadDetailExcel({
     '참고',
     '순증감에는 Region 수정, Annotation 추가 및 삭제가 반영됩니다. 기존 단일 Annotation 집계 기록과는 기준이 다를 수 있습니다.',
   ]);
+  summary.mergeCells(note.number, 2, note.number, 5);
   styleBody(note, 5, C.lightGray);
   note.getCell(1).font = {
     name: fontName,
@@ -367,7 +372,7 @@ export async function downloadDetailExcel({
     horizontal: 'left',
     indent: 1,
   };
-  note.height = 42;
+  note.height = 54;
 
   const detail = wb.addWorksheet('Task 상세', {
     views: [{ state: 'frozen', ySplit: 1 }],

@@ -1,12 +1,5 @@
 import { useEffect, useState } from 'react';
-import {
-  Link,
-  NavLink,
-  Route,
-  Routes,
-  useNavigate,
-  useParams,
-} from 'react-router-dom';
+import { Link, NavLink, Route, Routes, useParams } from 'react-router-dom';
 import { db, type Project, type Snapshot, type ProjectMember } from './db';
 import { inspectExport, type Task } from './analysis';
 import { downloadDraftExcel, downloadDetailExcel } from './excel';
@@ -907,11 +900,6 @@ function Analyze({
       setError(e instanceof Error ? e.message : '파일을 분석하지 못했습니다.');
     }
   }
-  const memberName = (id: number | null | undefined) => {
-    if (id == null) return '미상';
-    const m = members.find((m) => m.labelStudioUserId === id);
-    return m?.name ? `${m.name} (#${id})` : `작업자 #${id}`;
-  };
   const multi = tasks
     .map((task) => ({
       task,
@@ -1152,41 +1140,31 @@ function Analyze({
             />
           </div>
           {multi.length > 0 && (
-            <div className="review">
-              <h3>
-                <AlertTriangle size={18} /> 다중 Annotation 발견 ({multi.length}
-                개 Task)
+            <div
+              className="multi-annotation-alert"
+              role="status"
+              aria-label="다중 Annotation 안내"
+            >
+              <h3 className="multi-annotation-title">
+                <AlertTriangle size={16} aria-hidden="true" />
+                다중 Annotation 발견 · {multi.length}개 Task
               </h3>
-              <p>
-                하나의 Task에 유효한 Annotation이 여러 개 존재합니다. 모든 유효
-                Annotation을 집계했으니 중복 작업 여부를 확인해 주세요. 별도로
-                선택할 필요는 없습니다.
+              <p className="multi-annotation-description">
+                여러 Annotation이 있는 Task입니다. 모든 유효 Annotation이
+                집계되었습니다.
               </p>
-              {multi.map(({ task, candidates }) => (
-                <div className="review-item" key={task.id}>
-                  <div className="review-heading">
-                    <strong>Task #{task.id}</strong>
-                    <span>Annotation {candidates.length}개</span>
-                  </div>
-                  {candidates.map((annotation) => (
-                    <div className="option" key={annotation.id}>
-                      <span>
-                        Annotation #{annotation.id} · 제출자{' '}
-                        {memberName(annotation.completed_by)} · 수정자{' '}
-                        {memberName(annotation.updated_by)} · Region{' '}
-                        {annotation.result?.length ?? 0}개
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ))}
+              <div className="multi-annotation-tasks">
+                {multi.map(({ task }) => (
+                  <span className="multi-annotation-tag" key={task.id}>
+                    #{task.id}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
           <div className="actions">
             <span className="muted">
-              {multi.length > 0
-                ? `다중 Annotation ${multi.length}개 Task 확인 필요 · 전체 집계 완료`
-                : '모든 검사 완료'}
+              {multi.length > 0 ? '전체 집계 완료' : '모든 검사 완료'}
             </span>
             <button
               className="secondary"
