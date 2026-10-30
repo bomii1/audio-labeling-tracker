@@ -37,11 +37,23 @@ export function inspectExport(input: unknown, expectedProjectId: number) {
       );
     if (ids.has(task.id)) throw new Error(`중복 Task ID: ${task.id}`);
     ids.add(task.id);
-    for (const a of task.annotations)
-      if (!Number.isInteger(a.id) || !Array.isArray(a.result))
+    const annotationIds = new Set<number>();
+
+    for (const a of task.annotations) {
+      if (!Number.isInteger(a.id) || !Array.isArray(a.result)) {
         throw new Error(
           `Task ${task.id}의 Annotation 형식이 올바르지 않습니다.`,
         );
+      }
+
+      if (annotationIds.has(a.id)) {
+        throw new Error(
+          `Task ${task.id}에 중복된 Annotation ID가 있습니다: ${a.id}`,
+        );
+      }
+
+      annotationIds.add(a.id);
+    }
     return task;
   });
   const draftTaskIds = tasks
