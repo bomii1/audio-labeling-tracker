@@ -832,6 +832,21 @@ function ProjectMembers({ project }: { project: Project }) {
     </section>
   );
 }
+function annotationDateKst(value?: string | null): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(parsed);
+  const get = (key: string) =>
+    parts.find((part) => part.type === key)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
 function Analyze({
   project,
   refresh,
@@ -844,11 +859,15 @@ function Analyze({
   const [date, setDate] = useState(() =>
     new Date().toLocaleDateString('sv-SE'),
   );
+  const [mode, setMode] = useState<'all' | 'period'>('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [fileName, setFileName] = useState('');
   const [fileInputKey, setFileInputKey] = useState(0);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [drafts, setDrafts] = useState<number[]>([]);
   const [showAllDrafts, setShowAllDrafts] = useState(false);
+  const [noticesOpen, setNoticesOpen] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
@@ -858,6 +877,7 @@ function Analyze({
     setTasks([]);
     setDrafts([]);
     setShowAllDrafts(false);
+    setNoticesOpen(false);
     setError('');
     setStatus('');
     setFileInputKey((key) => key + 1);
@@ -865,10 +885,15 @@ function Analyze({
 
   async function upload(file?: File) {
     if (!file) return;
+    if (mode === 'period' && (!startDate || !endDate || startDate > endDate)) {
+      setError('시작일과 종료일을 올바르게 설정한 후 파일을 선택해 주세요.');
+      return;
+    }
     setError('');
     setStatus('');
     setTasks([]);
     setShowAllDrafts(false);
+    setNoticesOpen(false);
     setDrafts([]);
     setFileName(file.name);
     try {
@@ -881,28 +906,7 @@ function Analyze({
           'Draft가 발견되었습니다. Draft는 집계에서 제외하고 완료된 Annotation만 분석합니다.',
         );
       }
-      // Export에서 확인된 제출자/수정자 ID를 프로젝트에 자동 등록한다. 기존 이름과 역할은 보존한다.
-      const foundIds = new Set<number>();
-      for (const task of result.tasks)
-        for (const a of task.annotations ?? []) {
-          if (typeof a.completed_by === 'number') foundIds.add(a.completed_by);
-          if (typeof a.updated_by === 'number') foundIds.add(a.updated_by);
-        }
-      await db.transaction('rw', db.projectMembers, async () => {
-        for (const id of foundIds) {
-          const found = await db.projectMembers
-            .where('[projectId+labelStudioUserId]')
-            .equals([project.id!, id])
-            .first();
-          if (!found)
-            await db.projectMembers.add({
-              projectId: project.id!,
-              labelStudioUserId: id,
-              name: '',
-              role: 'worker',
-            });
-        }
-      });
+      // 파일 업로드/기간별 분석은 읽기 전용이다. 작업자 자동 등록은 전체 누적 저장 시에만 수행한다.
       const currentMembers = await db.projectMembers
         .where('projectId')
         .equals(project.id!)
@@ -918,7 +922,7 @@ function Analyze({
       candidates: (task.annotations ?? []).filter((a) => !a.was_cancelled),
     }))
     .filter((item) => item.candidates.length > 1);
-  const selectedRows = tasks.flatMap((task) =>
+  const allRows = tasks.flatMap((task) =>
     (task.annotations ?? [])
       .filter((annotation) => !annotation.was_cancelled)
       .map((annotation) => ({
@@ -927,9 +931,28 @@ function Analyze({
         completedBy: annotation.completed_by ?? null,
         updatedBy: annotation.updated_by ?? null,
         updatedAt: annotation.updated_at ?? null,
+        createdAt: annotation.created_at ?? null,
         regionCount: annotation.result?.length ?? 0,
       })),
   );
+  const validPeriod =
+    mode === 'all' || (!!startDate && !!endDate && startDate <= endDate);
+  const canShowAnalysis = tasks.length > 0 && validPeriod;
+  const selectedRows =
+    mode === 'all'
+      ? allRows
+      : allRows.filter((row) => {
+          const completedDate = annotationDateKst(row.createdAt);
+          return (
+            completedDate !== null &&
+            completedDate >= startDate &&
+            completedDate <= endDate
+          );
+        });
+  const missingCompletionDates = allRows.filter(
+    (row) => !annotationDateKst(row.createdAt),
+  ).length;
+  const periodLabel = `${startDate} ~ ${endDate}`;
   const totalTasks = new Set(selectedRows.map((row) => row.taskId)).size;
 
   const zeroRegionTasks = [
@@ -972,9 +995,28 @@ function Analyze({
     };
   }, [project.id, date, latest]);
   async function downloadPreview() {
-    if (!tasks.length) return;
+    if (!tasks.length || !validPeriod) {
+      setError('올바른 집계 기간을 선택해 주세요.');
+      return;
+    }
     setError('');
     try {
+      if (mode === 'period') {
+        await downloadDetailExcel({
+          project,
+          snapshot: {
+            recordDate: endDate,
+            fileName,
+            totalTasks,
+            totalRegions: total,
+            zeroRegionTasks,
+          },
+          rows: selectedRows,
+          members,
+          period: { startDate, endDate },
+        });
+        return;
+      }
       const earlier = await db.snapshots
         .where('projectId')
         .equals(project.id!)
@@ -1037,7 +1079,7 @@ function Analyze({
     }
   }
   async function save() {
-    if (!tasks.length || !date || saving) return;
+    if (!tasks.length || !date || saving || mode !== 'all') return;
     setSaving(true);
     setError('');
     try {
@@ -1056,6 +1098,31 @@ function Analyze({
         return;
       }
 
+      // 전체 누적 기록을 실제로 저장할 때만 사용자 ID를 등록한다.
+      const foundIds = new Set<number>();
+      for (const task of tasks) {
+        for (const annotation of task.annotations ?? []) {
+          if (typeof annotation.completed_by === 'number')
+            foundIds.add(annotation.completed_by);
+          if (typeof annotation.updated_by === 'number')
+            foundIds.add(annotation.updated_by);
+        }
+      }
+      await db.transaction('rw', db.projectMembers, async () => {
+        for (const id of foundIds) {
+          const found = await db.projectMembers
+            .where('[projectId+labelStudioUserId]')
+            .equals([project.id!, id])
+            .first();
+          if (!found)
+            await db.projectMembers.add({
+              projectId: project.id!,
+              labelStudioUserId: id,
+              name: '',
+              role: 'worker',
+            });
+        }
+      });
       await db.transaction('rw', db.snapshots, db.taskRegions, async () => {
         // 확인 이후에도 저장 직전의 실제 상태를 다시 조회한다.
         const current = await db.snapshots
@@ -1121,21 +1188,146 @@ function Analyze({
     <section className="panel">
       <h2>JSON 업로드 및 분석</h2>
       <p>Label Studio에서 Export한 프로젝트 전체 JSON을 업로드하세요.</p>
+      <div
+        style={{
+          margin: '20px 0',
+          padding: '16px 18px',
+          border: '1px solid #e7ecf1',
+          borderRadius: 12,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: 650,
+            color: '#27364e',
+            marginBottom: 12,
+          }}
+        >
+          집계 방식
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            columnGap: 28,
+            rowGap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          {(
+            [
+              { value: 'all', label: '전체 누적 집계' },
+              { value: 'period', label: '기간별 집계', hint: '기초 정산 자료' },
+            ] as const
+          ).map((option) => (
+            <label
+              key={option.value}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '3px 0',
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: mode === option.value ? 600 : 500,
+                color: mode === option.value ? '#1d4ed8' : '#334155',
+              }}
+            >
+              <input
+                type="radio"
+                name="analysis-mode"
+                checked={mode === option.value}
+                onChange={() => {
+                  setMode(option.value);
+                  clearSelectedFile();
+                }}
+                style={{
+                  margin: 0,
+                  accentColor: '#2563eb',
+                  width: 15,
+                  height: 15,
+                }}
+              />
+              {option.label}
+              {'hint' in option && (
+                <span
+                  style={{ fontSize: 11, color: '#8290a5', fontWeight: 400 }}
+                >
+                  ({option.hint})
+                </span>
+              )}
+            </label>
+          ))}
+        </div>
+      </div>
       <div className="form-row">
-        <label>
-          기록 날짜
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
-        </label>
-        <label className="file-picker">
+        {mode === 'all' ? (
+          <label>
+            기록 날짜
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+          </label>
+        ) : (
+          <>
+            <label>
+              시작일
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  clearSelectedFile();
+                }}
+              />
+            </label>
+            <label>
+              종료일
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  clearSelectedFile();
+                }}
+              />
+            </label>
+          </>
+        )}
+      </div>
+      {mode === 'period' && (
+        <div style={{ marginTop: -10, marginBottom: 18 }}>
+          {!validPeriod && (
+            <p
+              className="error"
+              style={{ fontSize: 13, margin: '0 0 8px', lineHeight: 1.5 }}
+            >
+              {!startDate || !endDate
+                ? '분석하려면 시작일과 종료일을 모두 지정해 주세요.'
+                : '종료일은 시작일보다 빠를 수 없습니다.'}
+            </p>
+          )}
+          <p className="muted">
+            Annotation 최초 생성일(created_at)을 KST 기준으로 필터링합니다.
+            Region 수는 현재 JSON 기준이며, 기간별 집계는 저장하지 않습니다.
+          </p>
+        </div>
+      )}
+      <div className="form-row">
+        <label
+          className="file-picker"
+          style={
+            !validPeriod ? { opacity: 0.5, cursor: 'not-allowed' } : undefined
+          }
+        >
           <UploadCloud size={19} /> JSON 파일 선택
           <input
             key={fileInputKey}
             type="file"
             accept=".json,application/json"
+            disabled={!validPeriod}
             onChange={(e) => void upload(e.target.files?.[0])}
           />
         </label>
@@ -1172,164 +1364,263 @@ function Analyze({
           {status}
         </p>
       )}
-      {tasks.length > 0 && (drafts.length > 0 || multi.length > 0) && (
-        <div
-          className="analysis-notices"
-          style={{
-            border: '1px solid #e6d4b5',
-            background: '#fffbf3',
-            borderRadius: 14,
-            padding: '20px 24px',
-            margin: '24px 0',
-          }}
-        >
-          <AlertTriangle
-            size={20}
-            color="#86580f"
-            aria-label="분석 시 확인 사항"
-            style={{ marginBottom: 16 }}
-          />
-          {drafts.length > 0 && (
-            <div>
-              <h4
-                style={{ margin: '0 0 10px', fontSize: 14, color: '#86580f' }}
-              >
-                Draft가 있는 Task · {drafts.length}개
-              </h4>
-              <div
-                className="multi-annotation-tasks"
-                style={{ marginBottom: 14 }}
-              >
-                {(showAllDrafts ? drafts : drafts.slice(0, 5)).map((taskId) => (
-                  <span className="multi-annotation-tag" key={taskId}>
-                    #{taskId}
-                  </span>
-                ))}
-                {drafts.length > 5 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllDrafts((current) => !current)}
-                    style={{
-                      border: '1px solid #ead3ac',
-                      borderRadius: 8,
-                      padding: '4px 10px',
-                      background: '#fff9ed',
-                      color: '#86580f',
-                      fontSize: 12,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {showAllDrafts ? '접기' : `${drafts.length - 5}개 더 보기`}
-                  </button>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                <button
-                  className="secondary"
-                  onClick={() =>
-                    void navigator.clipboard.writeText(drafts.join('\\n'))
-                  }
-                >
-                  Task ID 복사
-                </button>
-                <button
-                  className="secondary"
-                  onClick={() => void downloadDraftExcel(project, date, drafts)}
-                >
-                  Draft 목록 다운로드
-                </button>
-              </div>
-            </div>
-          )}
-          {drafts.length > 0 && multi.length > 0 && (
-            <hr
-              style={{
-                border: 0,
-                borderTop: '1px solid #eadfce',
-                margin: '20px 0',
-              }}
-            />
-          )}
-          {multi.length > 0 && (
-            <div>
-              <h4
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  margin: '0 0 10px',
-                  fontSize: 14,
-                  color: '#86580f',
-                }}
-              >
-                다중 Annotation Task · {multi.length}개
-              </h4>
-              <div className="multi-annotation-tasks">
-                {multi.map(({ task }) => (
-                  <span className="multi-annotation-tag" key={task.id}>
-                    #{task.id}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          <p style={{ margin: '16px 0 0', fontSize: 12, color: '#786a58' }}>
-            Draft는 제외하고 모든 유효 Annotation을 집계했습니다.
-          </p>
-        </div>
-      )}
-      {tasks.length > 0 && (
+      {canShowAnalysis && (
         <>
           <div className="metrics">
-            <Metric label="전체 Task" value={totalTasks.toLocaleString()} />
+            <Metric
+              label={mode === 'period' ? '기간 내 Task' : '전체 Task'}
+              value={totalTasks.toLocaleString()}
+            />
             <Metric
               label="전체 Annotation"
               value={totalAnnotations.toLocaleString()}
             />
-            <Metric label="누적 Region" value={total.toLocaleString()} />
+            <Metric
+              label={mode === 'period' ? '기간 내 Region' : '누적 Region'}
+              value={total.toLocaleString()}
+            />
             <Metric
               label="Region 0개 Task"
               value={zeroRegionTasks.toLocaleString()}
             />
-            <Metric
-              label="이전 기록 대비"
-              value={
-                previousForDate
-                  ? `${total - previousForDate.totalRegions >= 0 ? '+' : ''}${(
-                      total - previousForDate.totalRegions
-                    ).toLocaleString()}`
-                  : '기준값'
-              }
-              tone={
-                previousForDate
-                  ? total > previousForDate.totalRegions
-                    ? 'positive'
-                    : total < previousForDate.totalRegions
-                      ? 'negative'
-                      : 'neutral'
-                  : 'neutral'
-              }
-            />
+            {mode === 'all' && (
+              <Metric
+                label="이전 기록 대비"
+                value={
+                  previousForDate
+                    ? `${total - previousForDate.totalRegions >= 0 ? '+' : ''}${(
+                        total - previousForDate.totalRegions
+                      ).toLocaleString()}`
+                    : '기준값'
+                }
+                tone={
+                  previousForDate
+                    ? total > previousForDate.totalRegions
+                      ? 'positive'
+                      : total < previousForDate.totalRegions
+                        ? 'negative'
+                        : 'neutral'
+                    : 'neutral'
+                }
+              />
+            )}
           </div>
+          {canShowAnalysis && (drafts.length > 0 || multi.length > 0) && (
+            <div
+              className="analysis-notices"
+              style={{
+                border: '1px solid #e6d4b5',
+                background: '#fffbf3',
+                borderRadius: 12,
+                padding: '12px 16px',
+                margin: '18px 0',
+              }}
+            >
+              <button
+                type="button"
+                aria-expanded={noticesOpen}
+                onClick={() => setNoticesOpen((open) => !open)}
+                style={{
+                  display: 'flex',
+                  width: '100%',
+                  alignItems: 'center',
+                  gap: 9,
+                  padding: '3px 0',
+                  border: 0,
+                  background: 'transparent',
+                  color: '#86580f',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 650 }}>
+                  확인 필요 항목
+                </span>
+                <span
+                  style={{ fontSize: 12, fontWeight: 450, color: '#987444' }}
+                >
+                  Draft {drafts.length}개 · 다중 Annotation {multi.length}개
+                </span>
+                <span
+                  style={{
+                    marginLeft: 'auto',
+                    display: 'inline-flex',
+                    transform: noticesOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 280ms ease',
+                    fontSize: 15,
+                  }}
+                >
+                  ⌄
+                </span>
+              </button>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateRows: noticesOpen ? '1fr' : '0fr',
+                  opacity: noticesOpen ? 1 : 0,
+                  transition:
+                    'grid-template-rows 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms ease',
+                }}
+              >
+                <div style={{ overflow: 'hidden', minHeight: 0 }}>
+                  <div style={{ paddingTop: 16 }}>
+                    <p
+                      style={{
+                        fontSize: 11,
+                        color: '#987444',
+                        margin: '0 0 14px',
+                      }}
+                    >
+                      전체 업로드 파일 기준
+                    </p>
+                    {drafts.length > 0 && (
+                      <div>
+                        <h4
+                          style={{
+                            margin: '0 0 10px',
+                            fontSize: 14,
+                            color: '#86580f',
+                          }}
+                        >
+                          Draft가 있는 Task · {drafts.length}개
+                        </h4>
+                        <div
+                          className="multi-annotation-tasks"
+                          style={{ marginBottom: 14 }}
+                        >
+                          {(showAllDrafts ? drafts : drafts.slice(0, 5)).map(
+                            (taskId) => (
+                              <span
+                                className="multi-annotation-tag"
+                                key={taskId}
+                              >
+                                #{taskId}
+                              </span>
+                            ),
+                          )}
+                          {drafts.length > 5 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setShowAllDrafts((current) => !current)
+                              }
+                              style={{
+                                border: '1px solid #ead3ac',
+                                borderRadius: 8,
+                                padding: '4px 10px',
+                                background: '#fff9ed',
+                                color: '#86580f',
+                                fontSize: 12,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {showAllDrafts
+                                ? '접기'
+                                : `${drafts.length - 5}개 더 보기`}
+                            </button>
+                          )}
+                        </div>
+                        <div
+                          style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}
+                        >
+                          <button
+                            className="secondary"
+                            onClick={() =>
+                              void navigator.clipboard.writeText(
+                                drafts.join('\\n'),
+                              )
+                            }
+                          >
+                            Task ID 복사
+                          </button>
+                          <button
+                            className="secondary"
+                            onClick={() =>
+                              void downloadDraftExcel(project, date, drafts)
+                            }
+                          >
+                            Draft 목록 다운로드
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {drafts.length > 0 && multi.length > 0 && (
+                      <hr
+                        style={{
+                          border: 0,
+                          borderTop: '1px solid #eadfce',
+                          margin: '20px 0',
+                        }}
+                      />
+                    )}
+                    {multi.length > 0 && (
+                      <div>
+                        <h4
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            margin: '0 0 10px',
+                            fontSize: 14,
+                            color: '#86580f',
+                          }}
+                        >
+                          다중 Annotation Task · {multi.length}개
+                        </h4>
+                        <div className="multi-annotation-tasks">
+                          {multi.map(({ task }) => (
+                            <span
+                              className="multi-annotation-tag"
+                              key={task.id}
+                            >
+                              #{task.id}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <p
+                      style={{
+                        margin: '16px 0 0',
+                        fontSize: 12,
+                        color: '#786a58',
+                      }}
+                    >
+                      Draft는 제외하고 모든 유효 Annotation을 집계했습니다.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          {mode === 'period' && missingCompletionDates > 0 && (
+            <p className="warning">
+              생성일이 없거나 올바르지 않은 Annotation {missingCompletionDates}
+              개는 기간별 집계에서 제외됩니다.
+            </p>
+          )}
           <div className="actions">
             <span className="muted">
               {multi.length > 0 ? '전체 집계 완료' : '모든 검사 완료'}
             </span>
             <button
               className="secondary"
-              disabled={saving}
+              disabled={saving || !validPeriod}
               onClick={() => void downloadPreview()}
             >
               상세 분석 Excel 다운로드
             </button>
-            <button
-              className="primary"
-              disabled={saving}
-              onClick={() => void save()}
-            >
-              <CheckCircle2 size={17} />
-              {saving ? '저장 중...' : '분석 결과 저장'}
-            </button>
+            {mode === 'all' && (
+              <button
+                className="primary"
+                disabled={saving}
+                onClick={() => void save()}
+              >
+                <CheckCircle2 size={17} />
+                {saving ? '저장 중...' : '분석 결과 저장'}
+              </button>
+            )}
           </div>
         </>
       )}
