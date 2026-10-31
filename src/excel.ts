@@ -7,6 +7,7 @@ type Row = Pick<
 > & {
   updatedBy?: number | null;
   updatedAt?: string | null;
+  createdAt?: string | null;
 };
 type ExportInput = {
   project: Project;
@@ -23,6 +24,7 @@ type ExportInput = {
   previousTotal?: number;
   members: ProjectMember[];
   history?: Snapshot[];
+  period?: { startDate: string; endDate: string };
 };
 
 const C = {
@@ -178,6 +180,7 @@ export async function downloadDetailExcel({
   previousTotal,
   members,
   history,
+  period,
 }: ExportInput) {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Audio Labeling Tracker';
@@ -209,17 +212,24 @@ export async function downloadDetailExcel({
   const info: (string | number)[][] = [
     ['프로젝트명', project.name],
     ['프로젝트 ID', project.labelStudioProjectId],
-    ['기록 날짜', snapshot.recordDate],
+    [
+      period ? '집계 기간' : '기록 날짜',
+      period ? `${period.startDate} ~ ${period.endDate}` : snapshot.recordDate,
+    ],
     ['파일명', snapshot.fileName],
     ['전체 Task 수', snapshot.totalTasks],
-    ['누적 Region 수', snapshot.totalRegions],
+    [period ? '기간 내 Region 수' : '누적 Region 수', snapshot.totalRegions],
     ['Region 0개 Task 수', snapshot.zeroRegionTasks],
-    [
-      '직전 기록 대비 순증감',
-      previousTotal === undefined
-        ? '기준값'
-        : snapshot.totalRegions - previousTotal,
-    ],
+    ...(period
+      ? []
+      : [
+          [
+            '직전 기록 대비 순증감',
+            previousTotal === undefined
+              ? '기준값'
+              : snapshot.totalRegions - previousTotal,
+          ] as (string | number)[],
+        ]),
   ];
   for (const entry of info) {
     const i = info.indexOf(entry);
@@ -246,13 +256,23 @@ export async function downloadDetailExcel({
         bold: true,
         color: { argb: argb(C.ink) },
       };
-    if (i === 7) styleDelta(row.getCell(2), entry[1]);
+    if (!period && i === 7) styleDelta(row.getCell(2), entry[1]);
   }
 
   spacer(summary);
-  sectionTitle(summary, '작업자별 누적 실적', 5);
+  sectionTitle(
+    summary,
+    period ? '작업자별 기간 실적' : '작업자별 누적 실적',
+    5,
+  );
   styleHeader(
-    summary.addRow(['작업자 ID', '작업자 이름', '누적 Region', 'Task 수', '']),
+    summary.addRow([
+      '작업자 ID',
+      '작업자 이름',
+      period ? '기간 Region' : '누적 Region',
+      'Task 수',
+      '',
+    ]),
     5,
     C.lightBlue,
     true,
@@ -297,66 +317,98 @@ export async function downloadDetailExcel({
   }
 
   spacer(summary, 22);
-  sectionTitle(summary, '날짜별 작업 현황', 5);
+  sectionTitle(
+    summary,
+    period ? '날짜별 완료 작업 현황' : '날짜별 작업 현황',
+    5,
+  );
   const dailyHeader = summary.addRow([
     '기록 날짜',
     '전체 Task',
-    '누적 Region',
-    '순증감',
+    period ? '일별 Region' : '누적 Region',
+    period ? 'Annotation 수' : '순증감',
     'Region 0개 Task',
   ]);
   styleHeader(dailyHeader, 5, C.lightBlue, true);
-  const daily = new Map<string, Snapshot>();
-  for (const s of [...(history ?? [])].sort(
-    (a, b) =>
-      a.recordDate.localeCompare(b.recordDate) ||
-      a.uploadedAt.localeCompare(b.uploadedAt) ||
-      (a.id ?? 0) - (b.id ?? 0),
-  ))
-    daily.set(s.recordDate, s);
-  const timeline = [...daily.values()].filter(
-    (s) => s.recordDate <= snapshot.recordDate,
-  );
-  if (!timeline.some((s) => s.recordDate === snapshot.recordDate)) {
-    timeline.push({
-      ...snapshot,
-      projectId: project.id!,
-      uploadedAt: '',
-      id: undefined,
+  if (period) {
+    const dailyRows = new Map<string, Row[]>();
+    for (const row of rows) {
+      const date = kst(row.createdAt).slice(0, 10);
+      if (!date) continue;
+      dailyRows.set(date, [...(dailyRows.get(date) ?? []), row]);
+    }
+    for (const [date, dateRows] of [...dailyRows].sort(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      const ids = new Set(dateRows.map((r) => r.taskId));
+      const byTask = new Map<number, number>();
+      dateRows.forEach((r) =>
+        byTask.set(r.taskId, (byTask.get(r.taskId) ?? 0) + r.regionCount),
+      );
+      const row = summary.addRow([
+        date,
+        ids.size,
+        dateRows.reduce((sum, r) => sum + r.regionCount, 0),
+        dateRows.length,
+        [...byTask.values()].filter((n) => n === 0).length,
+      ]);
+      styleBody(row, 5, C.white, true);
+    }
+  } else {
+    const daily = new Map<string, Snapshot>();
+    for (const s of [...(history ?? [])].sort(
+      (a, b) =>
+        a.recordDate.localeCompare(b.recordDate) ||
+        a.uploadedAt.localeCompare(b.uploadedAt) ||
+        (a.id ?? 0) - (b.id ?? 0),
+    ))
+      daily.set(s.recordDate, s);
+    const timeline = [...daily.values()].filter(
+      (s) => s.recordDate <= snapshot.recordDate,
+    );
+    if (!timeline.some((s) => s.recordDate === snapshot.recordDate)) {
+      timeline.push({
+        ...snapshot,
+        projectId: project.id!,
+        uploadedAt: '',
+        id: undefined,
+      });
+      timeline.sort((a, b) => a.recordDate.localeCompare(b.recordDate));
+    }
+    timeline.forEach((s, i) => {
+      const prev = timeline[i - 1];
+      const delta = prev ? s.totalRegions - prev.totalRegions : '기준값';
+      const row = summary.addRow([
+        s.recordDate,
+        s.totalTasks,
+        s.totalRegions,
+        delta,
+        s.zeroRegionTasks,
+      ]);
+      styleBody(row, 5, i % 2 === 0 ? C.white : C.lightGray, true);
+      row.height = 34;
+      row.getCell(3).font = {
+        name: fontName,
+        size: 13,
+        bold: true,
+        color: { argb: argb(C.ink) },
+      };
+      row.getCell(5).font = {
+        name: fontName,
+        size: 12,
+        bold: true,
+        color: { argb: argb(C.ink) },
+      };
+      row.getCell(5).numFmt = '0';
+      styleDelta(row.getCell(4), delta);
     });
-    timeline.sort((a, b) => a.recordDate.localeCompare(b.recordDate));
   }
-  timeline.forEach((s, i) => {
-    const prev = timeline[i - 1];
-    const delta = prev ? s.totalRegions - prev.totalRegions : '기준값';
-    const row = summary.addRow([
-      s.recordDate,
-      s.totalTasks,
-      s.totalRegions,
-      delta,
-      s.zeroRegionTasks,
-    ]);
-    styleBody(row, 5, i % 2 === 0 ? C.white : C.lightGray, true);
-    row.height = 34;
-    row.getCell(3).font = {
-      name: fontName,
-      size: 13,
-      bold: true,
-      color: { argb: argb(C.ink) },
-    };
-    row.getCell(5).font = {
-      name: fontName,
-      size: 12,
-      bold: true,
-      color: { argb: argb(C.ink) },
-    };
-    row.getCell(5).numFmt = '0';
-    styleDelta(row.getCell(4), delta);
-  });
   spacer(summary, 16);
   const note = summary.addRow([
     '참고',
-    '순증감에는 Region 수정, Annotation 추가 및 삭제가 반영됩니다. 기존 단일 Annotation 집계 기록과는 기준이 다를 수 있습니다.',
+    period
+      ? '기간별 집계는 Annotation created_at(한국 시간)을 기준으로 하며, Region 수는 업로드한 JSON의 현재 값을 사용합니다.'
+      : '순증감에는 Region 수정, Annotation 추가 및 삭제가 반영됩니다. 기존 단일 Annotation 집계 기록과는 기준이 다를 수 있습니다.',
   ]);
   summary.mergeCells(note.number, 2, note.number, 5);
   styleBody(note, 5, C.lightGray);
@@ -391,7 +443,7 @@ export async function downloadDetailExcel({
       '작업자 ID',
       'Task ID',
       'Annotation ID',
-      '작업 날짜(KST)',
+      period ? '완료 기준일(KST)' : '작업 날짜(KST)',
       'Region 수',
       'Region 0개 Task 여부',
       '비고',
@@ -415,7 +467,7 @@ export async function downloadDetailExcel({
       r.completedBy ?? '',
       r.taskId,
       r.annotationId ?? '',
-      kst(r.updatedAt),
+      kst(period ? r.createdAt : r.updatedAt),
       r.regionCount,
       isZeroTask ? 'Y' : 'N',
       '',
@@ -438,7 +490,9 @@ export async function downloadDetailExcel({
   detail.autoFilter = { from: 'A1', to: `G${Math.max(1, detail.rowCount)}` };
   await saveBook(
     wb,
-    `${safeName(project.name)}_${snapshot.recordDate}_작업현황.xlsx`,
+    period
+      ? `${safeName(project.name)}_${period.startDate}_${period.endDate}_기간별작업현황.xlsx`
+      : `${safeName(project.name)}_${snapshot.recordDate}_작업현황.xlsx`,
   );
 }
 function styleDelta(cell: ExcelJS.Cell, value: string | number) {
