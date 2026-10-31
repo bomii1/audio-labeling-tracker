@@ -8,6 +8,7 @@ import {
   ArrowRight,
   CheckCircle2,
   FileJson,
+  CalendarDays,
   Folder,
   History,
   LayoutDashboard,
@@ -18,6 +19,8 @@ import {
   Trash2,
   Users,
   AlertTriangle,
+  TrendingUp,
+  TrendingDown,
 } from 'lucide-react';
 function useProjects() {
   const [items, setItems] = useState<Project[]>([]);
@@ -462,7 +465,7 @@ function ProjectPage({ project }: { project: Project }) {
               value={
                 latest
                   ? previous
-                    ? `${latest.totalRegions - previous.totalRegions >= 0 ? '+' : ''}${(latest.totalRegions - previous.totalRegions).toLocaleString()}`
+                    ? `${latest.totalRegions - previous.totalRegions > 0 ? '+' : ''}${(latest.totalRegions - previous.totalRegions).toLocaleString()}`
                     : '기준값'
                   : '—'
               }
@@ -486,11 +489,78 @@ function ProjectPage({ project }: { project: Project }) {
             />
           </div>
           <section className="panel">
-            <h2>최근 기록</h2>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: 12,
+                marginBottom: latest ? 20 : 0,
+              }}
+            >
+              <h2 style={{ margin: 0 }}>최근 기록</h2>
+              {latest && (
+                <button
+                  type="button"
+                  onClick={() => setTab('history')}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    border: 0,
+                    background: 'transparent',
+                    color: '#2563eb',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    padding: '4px 0',
+                  }}
+                >
+                  전체 기록 보기 <ArrowRight size={15} aria-hidden="true" />
+                </button>
+              )}
+            </div>
             {latest ? (
-              <p>
-                {latest.recordDate} 기준 · {latest.fileName}
-              </p>
+              <div style={{ display: 'grid', gap: 12, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <CalendarDays size={17} color="#64748b" aria-hidden="true" />
+                  <span style={{ fontWeight: 600, color: '#27364e' }}>
+                    {latest.recordDate.replace(/-/g, '.')}
+                  </span>
+                  <span className="muted" style={{ fontSize: 13 }}>
+                    기준
+                  </span>
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    minWidth: 0,
+                  }}
+                >
+                  <FileJson
+                    size={17}
+                    color="#64748b"
+                    style={{ flexShrink: 0 }}
+                    aria-hidden="true"
+                  />
+                  <span
+                    className="muted"
+                    title={latest.fileName}
+                    style={{
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      fontSize: 13,
+                    }}
+                  >
+                    {latest.fileName}
+                  </span>
+                </div>
+              </div>
             ) : (
               <div className="empty-small">
                 <p>아직 분석 기록이 없어요.</p>
@@ -631,10 +701,38 @@ function Metric({
   value: string;
   tone?: 'positive' | 'negative' | 'neutral';
 }) {
+  const hasDelta = tone !== undefined && value !== '기준값' && value !== '—';
+  const palette = {
+    positive: { background: '#f0fdf4', border: '#bbf7d0', text: '#15803d' },
+    negative: { background: '#fef2f2', border: '#fecaca', text: '#dc2626' },
+    neutral: { background: '#f8fafc', border: '#e2e8f0', text: '#64748b' },
+  } as const;
+  const colors = hasDelta && tone ? palette[tone] : undefined;
+  const TrendIcon =
+    tone === 'positive'
+      ? TrendingUp
+      : tone === 'negative'
+        ? TrendingDown
+        : null;
+
   return (
-    <div className="metric">
+    <div
+      className="metric"
+      style={
+        colors
+          ? { backgroundColor: colors.background, borderColor: colors.border }
+          : undefined
+      }
+    >
       <span>{label}</span>
-      <strong className={tone ? `delta-${tone}` : undefined}>{value}</strong>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {colors && TrendIcon && (
+          <TrendIcon size={21} color={colors.text} aria-hidden="true" />
+        )}
+        <strong style={colors ? { color: colors.text } : undefined}>
+          {value}
+        </strong>
+      </div>
     </div>
   );
 }
@@ -867,6 +965,15 @@ function Analyze({
   const [tasks, setTasks] = useState<Task[]>([]);
   const [drafts, setDrafts] = useState<number[]>([]);
   const [showAllDrafts, setShowAllDrafts] = useState(false);
+  const [draftPreviewCount, setDraftPreviewCount] = useState(5);
+  useEffect(() => {
+    const updateDraftPreviewCount = () => {
+      setDraftPreviewCount(window.innerWidth >= 1200 ? 12 : 5);
+    };
+    updateDraftPreviewCount();
+    window.addEventListener('resize', updateDraftPreviewCount);
+    return () => window.removeEventListener('resize', updateDraftPreviewCount);
+  }, []);
   const [noticesOpen, setNoticesOpen] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
@@ -963,7 +1070,6 @@ function Analyze({
       .every((row) => row.regionCount === 0),
   ).length;
 
-  const totalAnnotations = selectedRows.length;
   const total = selectedRows.reduce((sum, row) => sum + row.regionCount, 0);
   const [previousForDate, setPreviousForDate] = useState<Snapshot>();
 
@@ -1191,6 +1297,8 @@ function Analyze({
       <div
         style={{
           margin: '20px 0',
+          maxWidth: 560,
+          boxSizing: 'border-box',
           padding: '16px 18px',
           border: '1px solid #e7ecf1',
           borderRadius: 12,
@@ -1333,13 +1441,31 @@ function Analyze({
         </label>
       </div>
       {fileName && (
-        <div className="selected-file">
+        <div
+          className="selected-file"
+          style={{
+            width: '100%',
+            maxWidth: 560,
+            boxSizing: 'border-box',
+            minWidth: 0,
+          }}
+        >
           <FileJson
             size={18}
             className="selected-file-icon"
             aria-hidden="true"
           />
-          <span className="selected-file-name" title={fileName}>
+          <span
+            className="selected-file-name"
+            title={fileName}
+            style={{
+              flex: '1 1 auto',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
             {fileName}
           </span>
           <button
@@ -1372,10 +1498,6 @@ function Analyze({
               value={totalTasks.toLocaleString()}
             />
             <Metric
-              label="전체 Annotation"
-              value={totalAnnotations.toLocaleString()}
-            />
-            <Metric
               label={mode === 'period' ? '기간 내 Region' : '누적 Region'}
               value={total.toLocaleString()}
             />
@@ -1388,7 +1510,7 @@ function Analyze({
                 label="이전 기록 대비"
                 value={
                   previousForDate
-                    ? `${total - previousForDate.totalRegions >= 0 ? '+' : ''}${(
+                    ? `${total - previousForDate.totalRegions > 0 ? '+' : ''}${(
                         total - previousForDate.totalRegions
                       ).toLocaleString()}`
                     : '기준값'
@@ -1409,6 +1531,8 @@ function Analyze({
             <div
               className="analysis-notices"
               style={{
+                width: '100%',
+                boxSizing: 'border-box',
                 border: '1px solid #e6d4b5',
                 background: '#fffbf3',
                 borderRadius: 12,
@@ -1487,19 +1611,32 @@ function Analyze({
                         </h4>
                         <div
                           className="multi-annotation-tasks"
-                          style={{ marginBottom: 14 }}
+                          style={{
+                            marginBottom: 14,
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: 8,
+                          }}
                         >
-                          {(showAllDrafts ? drafts : drafts.slice(0, 5)).map(
-                            (taskId) => (
-                              <span
-                                className="multi-annotation-tag"
-                                key={taskId}
-                              >
-                                #{taskId}
-                              </span>
-                            ),
-                          )}
-                          {drafts.length > 5 && (
+                          {(showAllDrafts
+                            ? drafts
+                            : drafts.slice(0, draftPreviewCount)
+                          ).map((taskId) => (
+                            <span
+                              className="multi-annotation-tag"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                padding: '6px 11px',
+                                fontSize: 13,
+                                whiteSpace: 'nowrap',
+                              }}
+                              key={taskId}
+                            >
+                              #{taskId}
+                            </span>
+                          ))}
+                          {drafts.length > draftPreviewCount && (
                             <button
                               type="button"
                               onClick={() =>
@@ -1517,7 +1654,7 @@ function Analyze({
                             >
                               {showAllDrafts
                                 ? '접기'
-                                : `${drafts.length - 5}개 더 보기`}
+                                : `${drafts.length - draftPreviewCount}개 더 보기`}
                             </button>
                           )}
                         </div>
@@ -1568,10 +1705,20 @@ function Analyze({
                         >
                           다중 Annotation Task · {multi.length}개
                         </h4>
-                        <div className="multi-annotation-tasks">
+                        <div
+                          className="multi-annotation-tasks"
+                          style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}
+                        >
                           {multi.map(({ task }) => (
                             <span
                               className="multi-annotation-tag"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                padding: '6px 11px',
+                                fontSize: 13,
+                                whiteSpace: 'nowrap',
+                              }}
                               key={task.id}
                             >
                               #{task.id}
